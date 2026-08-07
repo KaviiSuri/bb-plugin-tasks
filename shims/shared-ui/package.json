@@ -1,0 +1,24 @@
+{
+  "name": "@bb/shared-ui",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    "./button": "./button.tsx",
+    "./command": "./command.tsx",
+    "./context-menu": "./context-menu.tsx",
+    "./dialog": "./dialog.tsx",
+    "./dropdown-menu": "./dropdown-menu.tsx",
+    "./hooks/use-compact-viewport": "./hooks/use-compact-viewport.tsx",
+    "./hooks/use-pointer-coarse": "./hooks/use-pointer-coarse.tsx",
+    "./icon": "./icon.tsx",
+    "./input": "./input.tsx",
+    "./lib/utils": "./lib/utils.tsx",
+    "./popover": "./popover.tsx",
+    "./select": "./select.tsx",
+    "./skeleton": "./skeleton.tsx",
+    "./tabs": "./tabs.tsx",
+    "./textarea": "./textarea.tsx",
+    "./tooltip": "./tooltip.tsx"
+  },
+  "license": "MIT"
+}

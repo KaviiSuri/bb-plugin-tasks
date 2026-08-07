@@ -1,0 +1,45 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "@bb/plugin-sdk": [
+        "./types/bb-plugin-sdk.d.ts"
+      ],
+      "@bb/plugin-sdk/app": [
+        "./types/bb-plugin-sdk-app.d.ts"
+      ],
+      "@/*": [
+        "./*"
+      ],
+      "@bb/shared-ui/lib/*": [
+        "./lib/*"
+      ],
+      "@bb/shared-ui/hooks/*": [
+        "./hooks/*"
+      ],
+      "@bb/shared-ui/*": [
+        "./components/ui/*"
+      ]
+    },
+    "noEmit": true,
+    "skipLibCheck": false
+  },
+  "include": [
+    "upstream",
+    "types",
+    "components",
+    "lib",
+    "hooks"
+  ]
+}
