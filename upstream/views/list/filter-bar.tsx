@@ -144,6 +144,8 @@ export function ListFilterBar({
   onSortChange,
   labelOptions,
   taskCount,
+  showSubtasks,
+  onShowSubtasksChange,
 }: {
   filters: ListFilterState;
   onChange: (filters: ListFilterState) => void;
@@ -151,6 +153,8 @@ export function ListFilterBar({
   onSortChange: (sort: TaskSort) => void;
   labelOptions: readonly LabelFilterOption[];
   taskCount: number | undefined;
+  showSubtasks: boolean;
+  onShowSubtasksChange: (showSubtasks: boolean) => void;
 }) {
   const keepOpen = (event: Event) => event.preventDefault();
   // Show the Label chip whenever there are options or a remembered selection
@@ -294,8 +298,23 @@ export function ListFilterBar({
           </button>
         ) : null}
       </div>
-      {/* Sort and the count sit outside the scroller so they stay visible and
-          aligned however far the filter chips overflow. */}
+      {/* Sub-task visibility sits with sort rather than in the chip scroller:
+          it is a view mode, not a filter, so `Clear` must not reset it. */}
+      <button
+        type="button"
+        aria-pressed={showSubtasks}
+        title={showSubtasks ? "Hide sub-tasks" : "Show sub-tasks"}
+        onClick={() => onShowSubtasksChange(!showSubtasks)}
+        className={cn(
+          "flex h-6 shrink-0 items-center gap-1 rounded-md border px-2.5 text-xs max-md:pointer-coarse:h-8",
+          showSubtasks
+            ? "border-input bg-accent text-foreground"
+            : "border-dashed border-border text-muted-foreground hover:border-input hover:text-foreground",
+        )}
+      >
+        <Icon name="ListView" className="size-3" />
+        Sub-tasks
+      </button>
       <SortChip sort={sort} onChange={onSortChange} />
       <span className="shrink-0 whitespace-nowrap text-xs tabular-nums text-subtle-foreground">
         {taskCount === undefined

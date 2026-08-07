@@ -29,11 +29,14 @@ export type ListPreferenceScope =
 export interface ListPreference {
   filters: ListFilterState;
   sort: TaskSort;
+  /** Include sub-tasks as their own rows instead of only on their parent. */
+  showSubtasks: boolean;
 }
 
 export const DEFAULT_LIST_PREFERENCE: ListPreference = {
   filters: EMPTY_FILTERS,
   sort: "manual",
+  showSubtasks: false,
 };
 
 interface StoredDocumentV1 {
@@ -114,6 +117,7 @@ export function sanitizeListPreference(raw: unknown): ListPreference {
     return {
       filters: { ...EMPTY_FILTERS },
       sort: DEFAULT_LIST_PREFERENCE.sort,
+      showSubtasks: DEFAULT_LIST_PREFERENCE.showSubtasks,
     };
   }
   const record = raw as Record<string, unknown>;
@@ -131,6 +135,9 @@ export function sanitizeListPreference(raw: unknown): ListPreference {
       labelNames: uniqueLabelNames(filtersRaw.labelNames),
     },
     sort: sanitizeSort(record.sort),
+    // Absent/garbage persists as the upstream default (parents only) rather
+    // than surprising an existing profile with a fuller list after upgrade.
+    showSubtasks: record.showSubtasks === true,
   };
 }
 
@@ -194,6 +201,7 @@ export function loadListPreference(scope: ListPreferenceScope): ListPreference {
     return {
       filters: { ...EMPTY_FILTERS },
       sort: DEFAULT_LIST_PREFERENCE.sort,
+      showSubtasks: DEFAULT_LIST_PREFERENCE.showSubtasks,
     };
   }
   return sanitizeListPreference(document.scopes[scope]);

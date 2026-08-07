@@ -1,6 +1,7 @@
 {
   "name": "@bb/shared-ui",
   "version": "0.0.0",
+  "private": true,
   "type": "module",
   "exports": {
     "./button": "./button.tsx",
@@ -19,6 +20,5 @@
     "./tabs": "./tabs.tsx",
     "./textarea": "./textarea.tsx",
     "./tooltip": "./tooltip.tsx"
-  },
-  "license": "MIT"
+  }
 }

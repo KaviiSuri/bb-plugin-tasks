@@ -104,16 +104,24 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
   }, [preferenceScope]);
   const filters = preference.filters;
   const sort = preference.sort;
+  const showSubtasks = preference.showSubtasks;
   const setFilters = (next: ListFilterState) => {
     setPreference((current) => {
-      const updated: ListPreference = { filters: next, sort: current.sort };
+      const updated: ListPreference = { ...current, filters: next };
+      storeListPreference(preferenceScope, updated);
+      return updated;
+    });
+  };
+  const setShowSubtasks = (next: boolean) => {
+    setPreference((current) => {
+      const updated: ListPreference = { ...current, showSubtasks: next };
       storeListPreference(preferenceScope, updated);
       return updated;
     });
   };
   const setSort = (next: TaskSort) => {
     setPreference((current) => {
-      const updated: ListPreference = { filters: current.filters, sort: next };
+      const updated: ListPreference = { ...current, sort: next };
       storeListPreference(preferenceScope, updated);
       return updated;
     });
@@ -146,7 +154,7 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
     statuses: filters.statuses,
     priorities: filters.priorities,
     labelIds,
-  });
+  }, showSubtasks);
   const meta = useTaskListMeta(tasksQuery.data);
   const edits = useListTaskEdits(tasksQuery.data, (message) =>
     push("error", message),
@@ -204,7 +212,13 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
   // context, so opening a task and returning (or refreshing) lands where the
   // user left off. Restore only once the real rows have loaded.
   const scrollRef = useRef<HTMLDivElement>(null);
-  const scopeKey = listScrollScopeKey({ projectId, activeOnly, filters, sort });
+  const scopeKey = listScrollScopeKey({
+    projectId,
+    activeOnly,
+    filters,
+    sort,
+    showSubtasks,
+  });
   // `useListTasks` keeps the previous scope's rows on screen while it refetches
   // and only flips `isLoading` in a later effect, so on the first render after a
   // filter/sort change the rows are stale but `isLoading` is still false. Treat
@@ -324,6 +338,8 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
         onSortChange={setSort}
         labelOptions={labelOptions}
         taskCount={displayTasks?.length}
+        showSubtasks={showSubtasks}
+        onShowSubtasksChange={setShowSubtasks}
       />
       <div
         ref={scrollRef}

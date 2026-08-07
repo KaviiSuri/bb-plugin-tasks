@@ -32,6 +32,11 @@ import { Button } from "@bb/shared-ui/button";
 import { Icon } from "@bb/shared-ui/icon";
 import { Skeleton } from "@bb/shared-ui/skeleton";
 import { cn } from "@bb/shared-ui/lib/utils";
+import {
+  listPreferenceScope,
+  loadListPreference,
+  storeListPreference,
+} from "../list/list-preference.js";
 
 const DRAG_THRESHOLD_PX = 5;
 
@@ -59,9 +64,21 @@ const EMPTY_META: BoardCardMeta = {
 async function fetchBoard(
   rpc: TasksRpc,
   projectId: string,
+  showSubtasks: boolean,
+  parentTaskId?: string,
 ): Promise<BoardData> {
-  const tasks = await listAllTasks(rpc, { projectId });
-  const topLevel = tasks.filter((task) => task.parentTaskId === null);
+  // Parent scope asks the server for exactly this task's children; project
+  // scope fetches everything so sub-task progress can be tallied below.
+  const tasks = await listAllTasks(
+    rpc,
+    parentTaskId === undefined ? { projectId } : { projectId, parentTaskId },
+  );
+  // Sub-task progress below is still computed from every task, so the donut on
+  // a parent card stays correct whether or not its children are also carded.
+  const topLevel =
+    parentTaskId !== undefined || showSubtasks
+      ? tasks
+      : tasks.filter((task) => task.parentTaskId === null);
 
   // Everything below decorates cards; a failure hides chips, never the board.
   const labels = await rpc.call("listLabels", { projectId }).then(
@@ -273,15 +290,38 @@ function BoardSkeleton() {
 
 export interface BoardViewProps {
   projectId: string;
+  /**
+   * When set, the board shows this task's sub-tasks instead of the project's
+   * top-level tasks. Nesting is capped at one level upstream
+   * (`subtask_depth_exceeded`), so a parent-scoped board is always leaves.
+   */
+  parentTaskId?: string;
 }
 
-export function BoardView({ projectId }: BoardViewProps) {
+export function BoardView({ projectId, parentTaskId }: BoardViewProps) {
   const rpc = useTasksRpc();
   const navigation = useTasksNavigation();
+  // Shares the list's stored preference for this project, so flipping
+  // sub-tasks on in one view does not silently disagree with the other.
+  const preferenceScope = listPreferenceScope(projectId, false);
+  const [showSubtasks, setShowSubtasksState] = useState(
+    () => loadListPreference(preferenceScope).showSubtasks,
+  );
+  useEffect(() => {
+    setShowSubtasksState(loadListPreference(preferenceScope).showSubtasks);
+  }, [preferenceScope]);
+  const setShowSubtasks = (next: boolean) => {
+    setShowSubtasksState(next);
+    storeListPreference(preferenceScope, {
+      ...loadListPreference(preferenceScope),
+      showSubtasks: next,
+    });
+  };
+
   const board = useTasksQuery(
-    (queryRpc) => fetchBoard(queryRpc, projectId),
+    (queryRpc) => fetchBoard(queryRpc, projectId, showSubtasks, parentTaskId),
     ["tasks:changed", "projects:changed", "threads:changed"],
-    [projectId],
+    [projectId, showSubtasks, parentTaskId ?? ""],
   );
 
   // Local column state renders instantly on drop; realtime refetches replace
@@ -551,10 +591,30 @@ export function BoardView({ projectId }: BoardViewProps) {
   };
 
   return (
+    <div className="flex h-full min-h-0 flex-col">
+      {parentTaskId === undefined ? (
+      <div className="flex shrink-0 items-center justify-end border-b border-border-hairline px-3.5 py-1.5">
+        <button
+          type="button"
+          aria-pressed={showSubtasks}
+          title={showSubtasks ? "Hide sub-tasks" : "Show sub-tasks"}
+          onClick={() => setShowSubtasks(!showSubtasks)}
+          className={cn(
+            "flex h-6 shrink-0 items-center gap-1 rounded-md border px-2.5 text-xs max-md:pointer-coarse:h-8",
+            showSubtasks
+              ? "border-input bg-accent text-foreground"
+              : "border-dashed border-border text-muted-foreground hover:border-input hover:text-foreground",
+          )}
+        >
+          <Icon name="ListView" className="size-3" />
+          Sub-tasks
+        </button>
+      </div>
+      ) : null}
     <div
       ref={boardRef}
       className={cn(
-        "flex h-full items-start gap-3 overflow-x-auto p-4",
+        "flex min-h-0 flex-1 items-start gap-3 overflow-x-auto p-4",
         drag !== null && "cursor-grabbing",
       )}
     >
@@ -583,7 +643,9 @@ export function BoardView({ projectId }: BoardViewProps) {
         }}
         projectId={projectId}
         defaultStatus={quickAddStatus ?? undefined}
+        defaultParentTaskId={parentTaskId}
       />
+    </div>
     </div>
   );
 }

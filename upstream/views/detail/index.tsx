@@ -13,6 +13,7 @@ import { useTasksNavigation } from "../../shell/routes.js";
 import { TasksEditor } from "../../editor/tasks-editor.js";
 import { TaskActivity } from "../activity/index.js";
 import { AttachmentsGrid, uploadAttachment } from "./attachments.js";
+import { BoardView } from "../board/index.js";
 import {
   createDescriptionSaver,
   type DescriptionSaver,
@@ -26,6 +27,7 @@ import {
 import { ThreadsSection } from "./threads.js";
 import { DetailToasts, useDetailToasts } from "./toast.js";
 import { Icon } from "@bb/shared-ui/icon";
+import { cn } from "@bb/shared-ui/lib/utils";
 import { Skeleton } from "@bb/shared-ui/skeleton";
 
 export interface DetailViewProps {
@@ -103,6 +105,38 @@ function EditableTitle({
   );
 }
 
+/** Persisted per parent task so each task remembers how you last viewed it. */
+const SUBTASK_VIEW_STORAGE_KEY = "bb-tasks:subtask-view";
+
+function loadSubtaskView(taskId: string): "list" | "board" {
+  try {
+    const raw = window.localStorage.getItem(SUBTASK_VIEW_STORAGE_KEY);
+    const parsed: unknown = raw === null ? null : JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object") return "list";
+    return (parsed as Record<string, unknown>)[taskId] === "board"
+      ? "board"
+      : "list";
+  } catch {
+    // Unreadable or overwritten storage falls back to upstream's list view.
+    return "list";
+  }
+}
+
+function storeSubtaskView(taskId: string, view: "list" | "board"): void {
+  try {
+    const raw = window.localStorage.getItem(SUBTASK_VIEW_STORAGE_KEY);
+    const parsed: unknown = raw === null ? null : JSON.parse(raw);
+    const next =
+      parsed !== null && typeof parsed === "object"
+        ? { ...(parsed as Record<string, unknown>) }
+        : {};
+    next[taskId] = view;
+    window.localStorage.setItem(SUBTASK_VIEW_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // Storage full or blocked: the choice just does not survive a reload.
+  }
+}
+
 function SubTasksSection({
   ref,
   task,
@@ -115,6 +149,16 @@ function SubTasksSection({
   onCreate: (title: string) => Promise<boolean>;
 }) {
   const navigation = useTasksNavigation();
+  const [view, setViewState] = useState<"list" | "board">(() =>
+    loadSubtaskView(task.id),
+  );
+  useEffect(() => {
+    setViewState(loadSubtaskView(task.id));
+  }, [task.id]);
+  const setView = (next: "list" | "board") => {
+    setViewState(next);
+    storeSubtaskView(task.id, next);
+  };
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
@@ -130,7 +174,41 @@ function SubTasksSection({
 
   return (
     <section ref={ref} className="mt-5">
-      {subtasks.map((subtask) => (
+      {/* The switch only earns its space once there is something to arrange. */}
+      {subtasks.length > 0 ? (
+        <div className="mb-1.5 flex items-center justify-end gap-1">
+          {(["list", "board"] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              aria-pressed={view === mode}
+              title={mode === "list" ? "List" : "Board"}
+              onClick={() => setView(mode)}
+              className={cn(
+                "flex h-6 items-center gap-1 rounded-md border px-2 text-xs capitalize",
+                view === mode
+                  ? "border-input bg-accent text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Icon
+                name={mode === "list" ? "ListView" : "Layers"}
+                className="size-3"
+              />
+              {mode}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {view === "board" && subtasks.length > 0 ? (
+        // Bounded height: the board scrolls its columns internally rather than
+        // stretching the detail page to the tallest column.
+        <div className="h-[26rem] rounded-md border border-border-hairline">
+          <BoardView projectId={task.projectId} parentTaskId={task.id} />
+        </div>
+      ) : null}
+      {view === "list"
+        ? subtasks.map((subtask) => (
         <button
           key={subtask.id}
           type="button"
@@ -144,7 +222,8 @@ function SubTasksSection({
           </span>
           <span className="min-w-0 truncate">{subtask.title}</span>
         </button>
-      ))}
+          ))
+        : null}
       {adding ? (
         <div className="flex h-8 items-center gap-2 border-b border-border-hairline px-0.5">
           <StatusIcon status="todo" className="opacity-60" />

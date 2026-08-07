@@ -37,6 +37,9 @@ export function listScrollScopeKey(params: {
   activeOnly: boolean;
   filters: ListFilterState;
   sort: TaskSort;
+  /** Part of the key: toggling it changes the row set, so a restored offset
+      from the other mode would land somewhere unrelated. */
+  showSubtasks: boolean;
 }): string {
   const list =
     params.projectId !== null
@@ -50,7 +53,7 @@ export function listScrollScopeKey(params: {
   const statuses = JSON.stringify([...params.filters.statuses].sort());
   const priorities = JSON.stringify([...params.filters.priorities].sort());
   const labels = JSON.stringify([...params.filters.labelNames].sort());
-  return `${list}|s=${statuses}|p=${priorities}|l=${labels}|sort=${params.sort}`;
+  return `${list}|s=${statuses}|p=${priorities}|l=${labels}|sort=${params.sort}|sub=${params.showSubtasks ? 1 : 0}`;
 }
 
 export function readListScroll(scopeKey: string): number | null {

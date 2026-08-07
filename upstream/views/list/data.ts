@@ -19,13 +19,18 @@ export interface ListTaskFilters {
 }
 
 /**
- * Server-side filtered task list. Subtasks are excluded (parentTaskId: null),
- * matching the design mock — they surface on their parent's detail page.
+ * Server-side filtered task list.
+ *
+ * Sub-tasks are excluded by default (`parentTaskId: null`) — upstream's design
+ * surfaces them on their parent's detail page. `showSubtasks` drops that filter
+ * so they list as their own rows; the store already treats an absent
+ * `parentTaskId` as "any depth", so this needs no server change.
  */
 export function useListTasks(
   projectId: string | null,
   activeOnly: boolean,
   filters: ListTaskFilters,
+  showSubtasks: boolean,
 ) {
   return useTasksQuery(
     async (rpc) =>
@@ -41,7 +46,7 @@ export function useListTasks(
           ? { labelIds: [...filters.labelIds] }
           : {}),
         activeOnly,
-        parentTaskId: null,
+        ...(showSubtasks ? {} : { parentTaskId: null }),
       }),
     ["tasks:changed", "threads:changed"],
     [
@@ -50,6 +55,7 @@ export function useListTasks(
       filters.statuses.join(),
       filters.priorities.join(),
       filters.labelIds === null ? "" : `active:${filters.labelIds.join()}`,
+      showSubtasks,
     ],
   );
 }
