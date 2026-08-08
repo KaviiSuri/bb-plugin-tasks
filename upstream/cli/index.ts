@@ -67,6 +67,7 @@ Commands:
   show                           Show full task details
   update                         Update a task
   comment                        Add a task comment
+  dependency add|remove|list     Manage task dependencies
   label create|list|delete
   attachment add|get|list|remove
   preset list|show|create|update|delete
@@ -96,6 +97,10 @@ const UPDATE_HELP =
   "Usage: bb tasks update <key-or-id> [--status <status>] [--priority <priority>] [--title <title>] [--description <markdown> | --description-file <path>] [--due YYYY-MM-DD | --no-due] [--parent <key-or-id> | --no-parent] [--add-label <name>]... [--remove-label <name>]... [--machine <id-or-name>] [--json]";
 const COMMENT_HELP =
   "Usage: bb tasks comment <key-or-id> (--body <markdown> | --body-file <path>) [--author <name>] [--machine <id-or-name>] [--notify] [--json]";
+const DEPENDENCY_HELP = `Usage:
+  bb tasks dependency add <dependent-key-or-id> --blocked-by <key-or-id>... [--json]
+  bb tasks dependency remove <dependent-key-or-id> --blocked-by <key-or-id>... [--json]
+  bb tasks dependency list <key-or-id> [--json]`;
 const LABEL_HELP = `Usage:
   bb tasks label create --project <prefix-or-id> --name <name> [--color <color>] [--json]
   bb tasks label list --project <prefix-or-id> [--json]
@@ -1093,6 +1098,11 @@ async function runShow(domain: TasksDomain, argv: string[]): Promise<string> {
     );
   }
   const attachments = [...directAttachments, ...commentAttachments];
+  const dependencies = tasksRpcContract.listTaskDependencies.output.parse(
+    await domain.listTaskDependencies(
+      tasksRpcContract.listTaskDependencies.input.parse({ taskId: task.id }),
+    ),
+  );
   const taskThreads = tasksRpcContract.listTaskThreads.output.parse(
     await domain.listTaskThreads(
       tasksRpcContract.listTaskThreads.input.parse({ taskId: task.id }),
@@ -1109,6 +1119,8 @@ async function runShow(domain: TasksDomain, argv: string[]): Promise<string> {
     project,
     labels,
     subtasks,
+    blockedBy: dependencies.blockedBy,
+    blocks: dependencies.blocks,
     attachments,
     taskThreads,
     pullRequests,
@@ -1138,6 +1150,26 @@ async function runShow(domain: TasksDomain, argv: string[]): Promise<string> {
         subtask.status,
         subtask.priority,
         subtask.title,
+      ]),
+      "(none)",
+    )}`,
+    `Blocked by\n${table(
+      ["KEY", "PROJECT", "STATUS", "TITLE"],
+      dependencies.blockedBy.map(({ task: related, project: relatedProject }) => [
+        related.key,
+        relatedProject.name,
+        related.status,
+        related.title,
+      ]),
+      "(none)",
+    )}`,
+    `Blocks\n${table(
+      ["KEY", "PROJECT", "STATUS", "TITLE"],
+      dependencies.blocks.map(({ task: related, project: relatedProject }) => [
+        related.key,
+        relatedProject.name,
+        related.status,
+        related.title,
       ]),
       "(none)",
     )}`,
@@ -1342,6 +1374,88 @@ async function runComment(
   return args.flags.has("json")
     ? json({ comment })
     : `Commented on ${task.key}  ${comment.id}`;
+}
+
+async function runDependency(
+  domain: TasksDomain,
+  ctx: PluginCliContext,
+  argv: string[],
+): Promise<string> {
+  const [action, ...rest] = argv;
+  if (!action || action === "--help") return DEPENDENCY_HELP;
+  const args = parseArgs(rest);
+  if (args.flags.has("help")) return DEPENDENCY_HELP;
+  const [address] = requirePositionals(args, 1, DEPENDENCY_HELP);
+  const task = await resolveTask(domain, address!);
+
+  if (action === "list") {
+    assertAllowed(args, []);
+    const result = tasksRpcContract.listTaskDependencies.output.parse(
+      await domain.listTaskDependencies(
+        tasksRpcContract.listTaskDependencies.input.parse({ taskId: task.id }),
+      ),
+    );
+    if (args.flags.has("json")) return json({ task, ...result });
+    return [
+      `Blocked by\n${table(
+        ["KEY", "PROJECT", "STATUS", "TITLE"],
+        result.blockedBy.map(({ task: related, project }) => [
+          related.key,
+          project.name,
+          related.status,
+          related.title,
+        ]),
+        "(none)",
+      )}`,
+      `Blocks\n${table(
+        ["KEY", "PROJECT", "STATUS", "TITLE"],
+        result.blocks.map(({ task: related, project }) => [
+          related.key,
+          project.name,
+          related.status,
+          related.title,
+        ]),
+        "(none)",
+      )}`,
+    ].join("\n\n");
+  }
+
+  if (action === "add" || action === "remove") {
+    assertAllowed(args, ["blocked-by"]);
+    const blockerAddresses = options(args, "blocked-by");
+    if (blockerAddresses.length === 0) {
+      throw new CliError("missing required --blocked-by");
+    }
+    const blockers = [];
+    for (const blockerAddress of blockerAddresses) {
+      blockers.push(await resolveTask(domain, blockerAddress));
+    }
+    const method =
+      action === "add" ? "addTaskDependencies" : "removeTaskDependencies";
+    const input = {
+      dependentTaskId: task.id,
+      blockerTaskIds: blockers.map((blocker) => blocker.id),
+      authorName: taskAuthor(ctx),
+    };
+    const result =
+      method === "addTaskDependencies"
+        ? tasksRpcContract.addTaskDependencies.output.parse(
+            await domain.addTaskDependencies(
+              tasksRpcContract.addTaskDependencies.input.parse(input),
+            ),
+          )
+        : tasksRpcContract.removeTaskDependencies.output.parse(
+            await domain.removeTaskDependencies(
+              tasksRpcContract.removeTaskDependencies.input.parse(input),
+            ),
+          );
+    if (!result.ok) throw new CliError(result.error.message);
+    return args.flags.has("json")
+      ? json({ task, blockers, dependencies: result.dependencies })
+      : `${action === "add" ? "Added" : "Removed"} ${blockers.length} blocker${blockers.length === 1 ? "" : "s"} for ${task.key}`;
+  }
+
+  throw new CliError(`unknown dependency subcommand: ${action}`);
 }
 
 async function runLabel(domain: TasksDomain, argv: string[]): Promise<string> {
@@ -1919,6 +2033,11 @@ export function registerTasksCli(
         usage: COMMENT_HELP,
       },
       {
+        name: "dependency",
+        summary: "Add, remove, or list task dependencies",
+        usage: DEPENDENCY_HELP,
+      },
+      {
         name: "label",
         summary: "Create, list, or delete project labels",
         usage: LABEL_HELP,
@@ -1996,6 +2115,9 @@ export function registerTasksCli(
             break;
           case "comment":
             stdout = await runComment(bb, store, domain, ctx, rest);
+            break;
+          case "dependency":
+            stdout = await runDependency(domain, ctx, rest);
             break;
           case "label":
             stdout = await runLabel(domain, rest);

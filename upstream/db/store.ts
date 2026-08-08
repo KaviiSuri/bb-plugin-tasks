@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { BbPluginApi } from "@bb/plugin-sdk";
 import { z } from "zod";
 import { initializeTasksSchema } from "./schema";
+import { TaskDependencyError } from "./types";
 import {
   TASKS_PAGE_DEFAULT_LIMIT,
   TASKS_PAGE_MAX_LIMIT,
@@ -27,6 +28,7 @@ import type {
   Project,
   SubtaskDoneCounts,
   Task,
+  TaskDependency,
   TaskLabel,
   TaskThread,
   TaskThreadLiveStatus,
@@ -110,6 +112,12 @@ interface LabelRow {
 interface TaskLabelRow {
   task_id: string;
   label_id: string;
+}
+
+interface TaskDependencyRow {
+  dependent_task_id: string;
+  blocker_task_id: string;
+  created_at: string;
 }
 
 interface CommentRow {
@@ -387,6 +395,14 @@ function labelFromRow(row: LabelRow): Label {
 
 function taskLabelFromRow(row: TaskLabelRow): TaskLabel {
   return { taskId: row.task_id, labelId: row.label_id };
+}
+
+function taskDependencyFromRow(row: TaskDependencyRow): TaskDependency {
+  return {
+    dependentTaskId: row.dependent_task_id,
+    blockerTaskId: row.blocker_task_id,
+    createdAt: row.created_at,
+  };
 }
 
 function commentFromRow(row: CommentRow): Comment {
@@ -719,6 +735,186 @@ export function createTasksStore(db: PluginDatabase) {
     const task = getTask(id);
     if (!task) throw new Error(`Task not found: ${id}`);
     return task;
+  }
+
+  function listTaskDependencies(taskId: string): {
+    blockedBy: TaskDependency[];
+    blocks: TaskDependency[];
+  } {
+    requireTask(taskId);
+    const blockedBy = db
+      .prepare<[string], TaskDependencyRow>(
+        `SELECT * FROM task_dependencies
+         WHERE dependent_task_id = ? ORDER BY created_at, blocker_task_id`,
+      )
+      .all(taskId)
+      .map(taskDependencyFromRow);
+    const blocks = db
+      .prepare<[string], TaskDependencyRow>(
+        `SELECT * FROM task_dependencies
+         WHERE blocker_task_id = ? ORDER BY created_at, dependent_task_id`,
+      )
+      .all(taskId)
+      .map(taskDependencyFromRow);
+    return { blockedBy, blocks };
+  }
+
+  function dependencyError(
+    code: ConstructorParameters<typeof TaskDependencyError>[0],
+    message: string,
+  ): never {
+    throw new TaskDependencyError(code, message);
+  }
+
+  function validateDependencyEndpoints(
+    dependentTaskId: string,
+    blockerTaskIds: readonly string[],
+  ): void {
+    if (!getTask(dependentTaskId)) {
+      dependencyError(
+        "dependency_endpoint_not_found",
+        `Dependent task not found: ${dependentTaskId}`,
+      );
+    }
+    const uniqueBlockers = new Set(blockerTaskIds);
+    if (uniqueBlockers.size !== blockerTaskIds.length) {
+      dependencyError(
+        "dependency_duplicate",
+        "The dependency request contains the same blocker more than once",
+      );
+    }
+    for (const blockerTaskId of blockerTaskIds) {
+      if (blockerTaskId === dependentTaskId) {
+        dependencyError(
+          "dependency_self_link",
+          "A task cannot be blocked by itself",
+        );
+      }
+      if (!getTask(blockerTaskId)) {
+        dependencyError(
+          "dependency_endpoint_not_found",
+          `Blocker task not found: ${blockerTaskId}`,
+        );
+      }
+    }
+  }
+
+  const addTaskDependenciesTransaction = db.transaction(
+    (
+      dependentTaskId: string,
+      blockerTaskIds: readonly string[],
+    ): TaskDependency[] => {
+      validateDependencyEndpoints(dependentTaskId, blockerTaskIds);
+      const existing = db
+        .prepare<[], TaskDependencyRow>("SELECT * FROM task_dependencies")
+        .all();
+      const existingKeys = new Set(
+        existing.map(
+          (edge) => `${edge.dependent_task_id}\u0000${edge.blocker_task_id}`,
+        ),
+      );
+      for (const blockerTaskId of blockerTaskIds) {
+        if (existingKeys.has(`${dependentTaskId}\u0000${blockerTaskId}`)) {
+          dependencyError(
+            "dependency_duplicate",
+            `${requireTask(dependentTaskId).key} is already blocked by ${requireTask(blockerTaskId).key}`,
+          );
+        }
+      }
+
+      const graph = new Map<string, Set<string>>();
+      const addGraphEdge = (from: string, to: string) => {
+        const targets = graph.get(from) ?? new Set<string>();
+        targets.add(to);
+        graph.set(from, targets);
+      };
+      for (const edge of existing) {
+        addGraphEdge(edge.dependent_task_id, edge.blocker_task_id);
+      }
+      for (const blockerTaskId of blockerTaskIds) {
+        addGraphEdge(dependentTaskId, blockerTaskId);
+      }
+      const visiting = new Set<string>();
+      const visited = new Set<string>();
+      const hasCycle = (taskId: string): boolean => {
+        if (visiting.has(taskId)) return true;
+        if (visited.has(taskId)) return false;
+        visiting.add(taskId);
+        for (const blockerId of graph.get(taskId) ?? []) {
+          if (hasCycle(blockerId)) return true;
+        }
+        visiting.delete(taskId);
+        visited.add(taskId);
+        return false;
+      };
+      for (const taskId of graph.keys()) {
+        if (hasCycle(taskId)) {
+          dependencyError(
+            "dependency_cycle",
+            `Adding the requested dependencies would create a cycle involving ${requireTask(dependentTaskId).key}`,
+          );
+        }
+      }
+
+      const createdAt = nowIso();
+      const insert = db.prepare<[string, string, string]>(
+        `INSERT INTO task_dependencies
+         (dependent_task_id, blocker_task_id, created_at) VALUES (?, ?, ?)`,
+      );
+      for (const blockerTaskId of blockerTaskIds) {
+        insert.run(dependentTaskId, blockerTaskId, createdAt);
+      }
+      return blockerTaskIds.map((blockerTaskId) => ({
+        dependentTaskId,
+        blockerTaskId,
+        createdAt,
+      }));
+    },
+  );
+
+  function addTaskDependencies(
+    dependentTaskId: string,
+    blockerTaskIds: readonly string[],
+  ): TaskDependency[] {
+    return addTaskDependenciesTransaction(dependentTaskId, blockerTaskIds);
+  }
+
+  const removeTaskDependenciesTransaction = db.transaction(
+    (
+      dependentTaskId: string,
+      blockerTaskIds: readonly string[],
+    ): TaskDependency[] => {
+      validateDependencyEndpoints(dependentTaskId, blockerTaskIds);
+      const existing = new Map(
+        listTaskDependencies(dependentTaskId).blockedBy.map((edge) => [
+          edge.blockerTaskId,
+          edge,
+        ]),
+      );
+      for (const blockerTaskId of blockerTaskIds) {
+        if (!existing.has(blockerTaskId)) {
+          dependencyError(
+            "dependency_not_found",
+            `${requireTask(dependentTaskId).key} is not blocked by ${requireTask(blockerTaskId).key}`,
+          );
+        }
+      }
+      const remove = db.prepare<[string, string]>(
+        `DELETE FROM task_dependencies
+         WHERE dependent_task_id = ? AND blocker_task_id = ?`,
+      );
+      for (const blockerTaskId of blockerTaskIds) {
+        remove.run(dependentTaskId, blockerTaskId);
+      }
+      return blockerTaskIds.map((blockerTaskId) => existing.get(blockerTaskId)!);
+    },
+  );
+
+  function removeTaskDependencies(
+    dependentTaskId: string,
+    blockerTaskIds: readonly string[],
+  ): TaskDependency[] {
+    return removeTaskDependenciesTransaction(dependentTaskId, blockerTaskIds);
   }
 
   function validateTaskParent(
@@ -1827,6 +2023,9 @@ export function createTasksStore(db: PluginDatabase) {
     updateTask,
     updatePosition,
     deleteTask,
+    listTaskDependencies,
+    addTaskDependencies,
+    removeTaskDependencies,
     createLabel,
     getLabel,
     listLabels,

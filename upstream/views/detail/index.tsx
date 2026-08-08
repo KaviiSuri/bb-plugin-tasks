@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { SmilePlusIcon } from "@hugeicons/core-free-icons";
-import type { Task } from "../../shared/contract.js";
+import type { DependencyTask, Task } from "../../shared/contract.js";
 import { useBbNavigate } from "@bb/plugin-sdk/app";
 import {
   listAllTasks,
@@ -25,6 +25,10 @@ import {
   type TaskPropertyUpdate,
 } from "./rail.js";
 import { ThreadsSection } from "./threads.js";
+import {
+  dependencyMutationEndpoints,
+  type DependencyDirection,
+} from "./dependencies-model.js";
 import { DetailToasts, useDetailToasts } from "./toast.js";
 import { Icon } from "@bb/shared-ui/icon";
 import { cn } from "@bb/shared-ui/lib/utils";
@@ -280,6 +284,7 @@ function TaskDetail({ task }: { task: Task }) {
   // previous markdown, so passing the server value straight through would
   // reset the editor on every unrelated realtime refresh.
   const [draft, setDraft] = useState<{ taskId: string; markdown: string }>();
+  const [dependencyBusy, setDependencyBusy] = useState(false);
   const rpcRef = useRef(rpc);
   rpcRef.current = rpc;
   const pushRef = useRef(push);
@@ -304,6 +309,27 @@ function TaskDetail({ task }: { task: Task }) {
     ["projects:changed"],
   );
   const project = projects.data?.find((entry) => entry.id === task.projectId);
+  const allTaskOptions = useTasksQuery<DependencyTask[]>(
+    async (query) => {
+      const [tasks, allProjects] = await Promise.all([
+        listAllTasks(query),
+        query.call("listProjects", {}),
+      ]);
+      const projectsById = new Map(
+        allProjects.projects.map((entry) => [entry.id, entry]),
+      );
+      return tasks.flatMap((entry) => {
+        const entryProject = projectsById.get(entry.projectId);
+        return entryProject ? [{ task: entry, project: entryProject }] : [];
+      });
+    },
+    ["tasks:changed", "projects:changed"],
+  );
+  const dependencies = useTasksQuery(
+    async (query) => query.call("listTaskDependencies", { taskId: task.id }),
+    ["tasks:changed"],
+    [task.id],
+  );
 
   const parent = useTasksQuery(
     async (query) =>
@@ -427,6 +453,38 @@ function TaskDetail({ task }: { task: Task }) {
     } catch (error) {
       push("error", error instanceof Error ? error.message : String(error));
       return false;
+    }
+  };
+
+  const mutateDependency = async (
+    action: "add" | "remove",
+    direction: DependencyDirection,
+    candidate: DependencyTask,
+  ) => {
+    if (dependencyBusy) return;
+    setDependencyBusy(true);
+    try {
+      const { dependentTaskId, blockerTaskIds } = dependencyMutationEndpoints(
+        task.id,
+        direction,
+        candidate.task.id,
+      );
+      const result =
+        action === "add"
+          ? await rpc.call("addTaskDependencies", {
+              dependentTaskId,
+              blockerTaskIds,
+            })
+          : await rpc.call("removeTaskDependencies", {
+              dependentTaskId,
+              blockerTaskIds,
+            });
+      if (!result.ok) push("error", result.error.message);
+      else dependencies.refresh();
+    } catch (error) {
+      push("error", error instanceof Error ? error.message : String(error));
+    } finally {
+      setDependencyBusy(false);
     }
   };
 
@@ -574,8 +632,18 @@ function TaskDetail({ task }: { task: Task }) {
           labels={labels.data}
           threads={threads.data ?? []}
           presets={presets.data}
+          blockedBy={dependencies.data?.blockedBy ?? []}
+          blocks={dependencies.data?.blocks ?? []}
+          allTasks={allTaskOptions.data ?? []}
+          dependencyBusy={dependencyBusy}
           onUpdate={(update) => void updateTask(update)}
           onError={(message) => push("error", message)}
+          onDependencyAdd={(direction, candidate) =>
+            void mutateDependency("add", direction, candidate)
+          }
+          onDependencyRemove={(direction, candidate) =>
+            void mutateDependency("remove", direction, candidate)
+          }
           className="hidden @[45rem]:block"
         />
       </div>
