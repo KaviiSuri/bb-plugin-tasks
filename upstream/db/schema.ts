@@ -257,6 +257,17 @@ const MIGRATIONS = [
       id
     );
   `,
+  `
+    DROP INDEX idx_tasks_blocker_candidates;
+    CREATE INDEX idx_tasks_blocker_project ON tasks (
+      project_id,
+      CASE WHEN status IN ('done', 'canceled') THEN 1 ELSE 0 END,
+      number,
+      id
+    );
+    CREATE INDEX idx_projects_blocker_candidates
+      ON projects(name COLLATE NOCASE, id);
+  `,
 ] as const;
 
 export function initializeTasksSchema(db: PluginDatabase): void {

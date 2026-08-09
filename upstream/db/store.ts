@@ -9,7 +9,12 @@ import {
   type TaskSort,
 } from "../shared/pagination.js";
 import { presetPermissionModeSchema } from "../shared/contract.js";
-import { TERMINAL_TASK_STATUSES } from "../shared/blocker-candidates.js";
+import {
+  BLOCKER_CANDIDATE_QUERY,
+  SELECTED_BLOCKER_QUERY,
+  type BlockerCandidateQueryParameters,
+  type SelectedBlockerQueryParameters,
+} from "./blocker-candidate-query.js";
 import type {
   Attachment,
   Comment,
@@ -992,81 +997,34 @@ export function createTasksStore(db: PluginDatabase) {
   } {
     requireProject(input.projectId);
     const dependentTaskId = input.dependentTaskId ?? null;
-    const invalidTaskIds = new Set<string>();
+    if (dependentTaskId !== null) requireTask(dependentTaskId);
 
-    if (dependentTaskId !== null) {
-      requireTask(dependentTaskId);
-      invalidTaskIds.add(dependentTaskId);
-      for (const edge of listTaskDependencies(dependentTaskId).blockedBy) {
-        invalidTaskIds.add(edge.blockerTaskId);
-      }
+    const selectedParameters: SelectedBlockerQueryParameters = {
+      dependentTaskId,
+      selectedTaskIdsJson: JSON.stringify(input.selectedTaskIds ?? []),
+    };
+    // Selected reconciliation is intentionally a separate indexed read. The
+    // candidate query excludes the requested IDs through json_each, while this
+    // query returns only endpoints still durable and graph-valid.
+    const selected = db
+      .prepare<SelectedBlockerQueryParameters, TaskRow>(SELECTED_BLOCKER_QUERY)
+      .all(selectedParameters)
+      .map(taskFromRow);
 
-      // A prospective blocker is invalid when it already depends directly or
-      // transitively on the dependent. Traverse the reciprocal (blocks)
-      // direction once so all cycle-producing candidates are excluded.
-      const downstream = db
-        .prepare<[string], { task_id: string }>(
-          `WITH RECURSIVE downstream(task_id) AS (
-             SELECT ?
-             UNION
-             SELECT td.dependent_task_id
-             FROM task_dependencies td
-             JOIN downstream d ON td.blocker_task_id = d.task_id
-           )
-           SELECT task_id FROM downstream`,
-        )
-        .all(dependentTaskId);
-      for (const row of downstream) invalidTaskIds.add(row.task_id);
-    }
-
-    // Re-resolve controlled selection IDs from durable state. Missing or newly
-    // invalid tasks are omitted so clients can reconcile stale selections.
-    const selected = (input.selectedTaskIds ?? []).flatMap((taskId) => {
-      const task = getTask(taskId);
-      return task && !invalidTaskIds.has(task.id) ? [task] : [];
-    });
-    const excludedTaskIds = new Set([
-      ...invalidTaskIds,
-      ...selected.map((task) => task.id),
-    ]);
     const query = input.query?.trim() ?? "";
-    const parameters: Record<string, SqlParameter> = {
+    const candidateParameters: BlockerCandidateQueryParameters = {
+      ...selectedParameters,
       currentProjectId: input.projectId,
-      terminalStatus0: TERMINAL_TASK_STATUSES[0],
-      terminalStatus1: TERMINAL_TASK_STATUSES[1],
+      query,
+      search: `%${escapeLike(query)}%`,
       candidateLimit: input.limit ?? 50,
     };
-    const clauses: string[] = [];
-    if (query !== "") {
-      parameters.search = `%${escapeLike(query)}%`;
-      clauses.push(`(
-        t.title LIKE @search ESCAPE '\\'
-        OR (p.prefix || '-' || t.number) LIKE @search ESCAPE '\\'
-      )`);
-    }
-    if (excludedTaskIds.size > 0) {
-      const names = [...excludedTaskIds].map((taskId, index) => {
-        const name = `excluded${index}`;
-        parameters[name] = taskId;
-        return `@${name}`;
-      });
-      clauses.push(`t.id NOT IN (${names.join(", ")})`);
-    }
-    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
     const candidates = db
-      .prepare<Record<string, SqlParameter>, TaskRow>(
-        `${taskSelect}
-         ${where}
-         ORDER BY
-           CASE WHEN t.status IN (@terminalStatus0, @terminalStatus1)
-             THEN 1 ELSE 0 END,
-           CASE WHEN t.project_id = @currentProjectId THEN 0 ELSE 1 END,
-           p.name COLLATE NOCASE,
-           t.number,
-           t.id
-         LIMIT @candidateLimit`,
-      )
-      .all(parameters)
+      .prepare<
+        BlockerCandidateQueryParameters,
+        TaskRow
+      >(BLOCKER_CANDIDATE_QUERY)
+      .all(candidateParameters)
       .map(taskFromRow);
     return { candidates, selected };
   }

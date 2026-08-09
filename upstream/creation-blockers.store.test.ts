@@ -1,6 +1,10 @@
 import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import { createTasksStore } from "./db/index.js";
+import {
+  BLOCKER_CANDIDATE_QUERY,
+  type BlockerCandidateQueryParameters,
+} from "./db/blocker-candidate-query.js";
 import { tasksRpcContract } from "./shared/contract.js";
 import { groupBlockerCandidates } from "./views/manage/blocker-picker-model.js";
 
@@ -147,12 +151,112 @@ describe("creation blocker contract and store search", () => {
         })
         .candidates.map((task) => task.id),
     ).toEqual([otherMatch.id]);
+    const plan = db
+      .prepare<BlockerCandidateQueryParameters, { detail: string }>(
+        `EXPLAIN QUERY PLAN ${BLOCKER_CANDIDATE_QUERY}`,
+      )
+      .all({
+        currentProjectId: data.currentProject.id,
+        dependentTaskId: null,
+        selectedTaskIdsJson: "[]",
+        query: "",
+        search: "%%",
+        candidateLimit: 2,
+      })
+      .map((row) => row.detail);
     expect(
-      db
-        .prepare("PRAGMA index_list('tasks')")
-        .all()
-        .map((row) => (row as { name: string }).name),
-    ).toContain("idx_tasks_blocker_candidates");
+      plan.filter((detail) => detail.startsWith("CO-ROUTINE ")),
+    ).toHaveLength(4);
+    expect(plan).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          "SEARCH t USING INDEX idx_tasks_blocker_project (project_id=? AND <expr>=?)",
+        ),
+        expect.stringContaining(
+          "SCAN p USING INDEX idx_projects_blocker_candidates",
+        ),
+        expect.stringContaining(
+          "SEARCH dependency USING COVERING INDEX idx_task_dependencies_blocker",
+        ),
+      ]),
+    );
+    expect(plan.some((detail) => /^SCAN t(?:$| )/.test(detail))).toBe(false);
+    db.close();
+  });
+
+  it("orders the bounded other-project phase by project name", () => {
+    const { db, store } = setup();
+    const data = fixture(store);
+    const zulu = store.createProject({
+      name: "Zulu project",
+      prefix: "ZUL",
+      color: "purple",
+    });
+    const alpha = store.createProject({
+      name: "Alpha project",
+      prefix: "ALP",
+      color: "orange",
+    });
+    const current = store.createTask({
+      projectId: data.currentProject.id,
+      title: "Ranked current",
+    });
+    const zuluTask = store.createTask({
+      projectId: zulu.id,
+      title: "Ranked zulu",
+    });
+    const alphaTask = store.createTask({
+      projectId: alpha.id,
+      title: "Ranked alpha",
+    });
+
+    expect(
+      store
+        .searchBlockerCandidates({
+          projectId: data.currentProject.id,
+          query: "ranked",
+          limit: 3,
+        })
+        .candidates.map((task) => task.id),
+    ).toEqual([current.id, alphaTask.id, zuluTask.id]);
+    db.close();
+  });
+
+  it("keeps recursive graph exclusions bounded beyond legacy variable limits", () => {
+    const { db, store } = setup();
+    const data = fixture(store);
+    const dependent = store.createTask({
+      projectId: data.currentProject.id,
+      title: "Dependent",
+    });
+    const insertEdge = db.prepare(
+      `INSERT INTO task_dependencies
+       (dependent_task_id, blocker_task_id, created_at) VALUES (?, ?, ?)`,
+    );
+    const createdAt = new Date().toISOString();
+    const addDownstream = db.transaction(() => {
+      for (let index = 0; index < 1_200; index += 1) {
+        const downstream = store.createTask({
+          projectId: data.otherProject.id,
+          title: `Downstream ${index}`,
+        });
+        insertEdge.run(downstream.id, dependent.id, createdAt);
+      }
+    });
+    addDownstream();
+
+    const result = store.searchBlockerCandidates({
+      projectId: data.currentProject.id,
+      dependentTaskId: dependent.id,
+      limit: 5,
+    });
+    expect(result.candidates).toHaveLength(4);
+    expect(result.candidates.map((task) => task.id)).toEqual([
+      data.currentActive.id,
+      data.otherActive.id,
+      data.currentDone.id,
+      data.otherCanceled.id,
+    ]);
     db.close();
   });
 
