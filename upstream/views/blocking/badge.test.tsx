@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   call: vi.fn(),
   go: vi.fn(),
   invalidate: null as null | (() => void),
+  refreshGeneration: 0,
 }));
 
 vi.mock("../../shell/data.js", () => ({
@@ -27,6 +28,9 @@ vi.mock("../../shell/data.js", () => ({
 }));
 vi.mock("../../shell/routes.js", () => ({
   useTasksNavigation: () => ({ go: mocks.go }),
+}));
+vi.mock("../../shell/refresh.js", () => ({
+  useTasksRefresh: () => ({ generation: mocks.refreshGeneration }),
 }));
 
 const task: Task = {
@@ -53,6 +57,7 @@ afterEach(() => {
   mocks.call.mockReset();
   mocks.go.mockReset();
   mocks.invalidate = null;
+  mocks.refreshGeneration = 0;
 });
 
 const blocker = {
@@ -101,6 +106,7 @@ describe("BlockedBadge accessibility", () => {
     const trigger = screen.getByRole("button", {
       name: "Blocked: 1 unresolved blocker",
     });
+    expect(trigger.textContent).toContain("Blocked · 1");
     fireEvent.mouseEnter(trigger);
 
     const card = await screen.findByRole("dialog", {
@@ -163,6 +169,87 @@ describe("BlockedBadge accessibility", () => {
     expect(await screen.findByText("Renamed dependency")).toBeTruthy();
     expect(screen.getByText("Renamed project")).toBeTruthy();
     expect(screen.queryByLabelText("DEP-1 is also blocked")).toBeNull();
+    expect(mocks.call).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets invalidation win a race with the initial detail request", async () => {
+    let resolveInitial!: (value: {
+      blockedBy: Array<typeof blocker>;
+      blocks: [];
+    }) => void;
+    let resolveReplacement!: (value: {
+      blockedBy: Array<typeof blocker>;
+      blocks: [];
+    }) => void;
+    mocks.call
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveInitial = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveReplacement = resolve;
+        }),
+      );
+    render(<BlockedBadge task={task} />);
+    fireEvent.mouseEnter(
+      screen.getByRole("button", { name: "Blocked: 1 unresolved blocker" }),
+    );
+    await waitFor(() => expect(mocks.call).toHaveBeenCalledTimes(1));
+
+    act(() => mocks.invalidate?.());
+    await waitFor(() => expect(mocks.call).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      resolveReplacement({
+        blockedBy: [
+          {
+            ...blocker,
+            task: { ...blocker.task, title: "Fresh dependency" },
+          },
+        ],
+        blocks: [],
+      });
+    });
+    expect(await screen.findByText("Fresh dependency")).toBeTruthy();
+
+    await act(async () => {
+      resolveInitial({
+        blockedBy: [
+          {
+            ...blocker,
+            task: { ...blocker.task, title: "Stale dependency" },
+          },
+        ],
+        blocks: [],
+      });
+    });
+    expect(screen.queryByText("Stale dependency")).toBeNull();
+    expect(screen.getByText("Fresh dependency")).toBeTruthy();
+  });
+
+  it("refreshes durable details when reconnect/manual generation changes", async () => {
+    mocks.call
+      .mockResolvedValueOnce({ blockedBy: [blocker], blocks: [] })
+      .mockResolvedValueOnce({
+        blockedBy: [
+          {
+            ...blocker,
+            task: { ...blocker.task, title: "Reconnected dependency" },
+          },
+        ],
+        blocks: [],
+      });
+    const view = render(<BlockedBadge task={task} />);
+    fireEvent.mouseEnter(
+      screen.getByRole("button", { name: "Blocked: 1 unresolved blocker" }),
+    );
+    await screen.findByText("Ship dependency");
+
+    mocks.refreshGeneration = 1;
+    view.rerender(<BlockedBadge task={task} />);
+
+    expect(await screen.findByText("Reconnected dependency")).toBeTruthy();
     expect(mocks.call).toHaveBeenCalledTimes(2);
   });
 

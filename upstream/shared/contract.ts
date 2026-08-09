@@ -5,6 +5,12 @@ import {
   TASKS_PAGE_DEFAULT_LIMIT,
   TASKS_PAGE_MAX_LIMIT,
 } from "./pagination.js";
+import { TASK_BLOCKING_FILTERS } from "./blocking.js";
+
+export {
+  TASK_BLOCKING_FILTERS,
+  type TaskBlockingFilter,
+} from "./blocking.js";
 
 export const TASK_STATUSES = [
   "backlog",
@@ -22,8 +28,6 @@ export const TASK_PRIORITIES = [
   "low",
   "none",
 ] as const;
-
-export const TASK_BLOCKING_FILTERS = ["all", "blocked", "not_blocked"] as const;
 
 export const TASK_THREAD_LIVE_STATUSES = [
   "starting",
@@ -891,7 +895,6 @@ export type DependencyCandidates = z.infer<
 >;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
-export type TaskBlockingFilter = (typeof TASK_BLOCKING_FILTERS)[number];
 export type Label = z.infer<typeof labelSchema>;
 export type Comment = z.infer<typeof commentSchema>;
 export type CommentProvider = z.infer<typeof commentProviderSchema>;

@@ -607,6 +607,55 @@ function mutateWithBlockingTransitions<T>(
   return { value, transitioned };
 }
 
+interface TaskMutationActivityResult {
+  task: StoredTask;
+  systemCommentsWritten: number;
+}
+
+function runTaskMutationWithBlockingLifecycle(
+  bb: BbPluginApi,
+  store: TasksApiStore,
+  current: StoredTask,
+  nextStatus: StoredTask["status"],
+  authorName: string,
+  mutation: () => TaskMutationActivityResult,
+): Task {
+  const statusChanged = nextStatus !== current.status;
+  const impactTasks = statusChanged
+    ? blockingImpactTasks(store, current.id)
+    : [current];
+  const result = store.transaction(() => {
+    const transition = statusChanged
+      ? mutateWithBlockingTransitions(
+          store,
+          impactTasks,
+          authorName,
+          {
+            kind: "status",
+            changedTask: current,
+            to: nextStatus,
+          },
+          mutation,
+        )
+      : { value: mutation(), transitioned: new Set<string>() };
+    return { ...transition.value, transitioned: transition.transitioned };
+  });
+
+  const task = apiTask(store, result.task);
+  publishTasksChanged(bb, task.id, task.projectId);
+  if (statusChanged) {
+    for (const affected of impactTasks) {
+      if (affected.id !== task.id) {
+        publishTasksChanged(bb, affected.id, affected.projectId);
+      }
+    }
+  }
+  const commentTaskIds = new Set(result.transitioned);
+  if (result.systemCommentsWritten > 0) commentTaskIds.add(task.id);
+  for (const taskId of commentTaskIds) publishCommentsChanged(bb, taskId);
+  return task;
+}
+
 function attachmentMetadata(attachment: StoredAttachment): AttachmentMetadata {
   return {
     id: attachment.id,
@@ -1090,17 +1139,17 @@ export function registerHandlers(
           validateTaskLabels(store, current.projectId, input.labelIds);
         }
 
-        const statusWillChange =
-          input.status !== undefined && input.status !== current.status;
-        const impactTasks = statusWillChange
-          ? blockingImpactTasks(store, current.id)
-          : [current];
-        const result = store.transaction(() => {
-          const beforeLabelIds = store.tasks
-            .listTaskLabels(current.id)
-            .map((link) => link.labelId);
-          const update = () =>
-            store.tasks.updateTask(current.id, {
+        const task = runTaskMutationWithBlockingLifecycle(
+          bb,
+          store,
+          current,
+          input.status ?? current.status,
+          input.authorName,
+          () => {
+            const beforeLabelIds = store.tasks
+              .listTaskLabels(current.id)
+              .map((link) => link.labelId);
+            const updated = store.tasks.updateTask(current.id, {
               title: input.title,
               description: input.description,
               status: input.status,
@@ -1108,65 +1157,42 @@ export function registerHandlers(
               dueDate: input.dueDate,
               parentTaskId: input.parentTaskId,
             });
-          const transition = statusWillChange
-            ? mutateWithBlockingTransitions(
-                store,
-                impactTasks,
-                input.authorName,
-                {
-                  kind: "status",
-                  changedTask: current,
-                  to: input.status!,
-                },
-                update,
-              )
-            : { value: update(), transitioned: new Set<string>() };
-          const updated = transition.value;
-          if (input.labelIds) {
-            replaceTaskLabels(store, current.id, input.labelIds);
-          }
-
-          const bodies: string[] = [];
-          if (updated.status !== current.status) {
-            bodies.push(
-              `Status changed to ${statusName(updated.status)} by ${input.authorName}`,
-            );
-          }
-          if (updated.priority !== current.priority) {
-            bodies.push(
-              `Priority changed to ${priorityName(updated.priority)} by ${input.authorName}`,
-            );
-          }
-          if (updated.dueDate !== current.dueDate) {
-            bodies.push(
-              updated.dueDate === null
-                ? `Due date removed by ${input.authorName}`
-                : `Due date changed to ${updated.dueDate} by ${input.authorName}`,
-            );
-          }
-          if (input.labelIds && labelsChanged(beforeLabelIds, input.labelIds)) {
-            bodies.push(labelChangeBody(store, current.id, input.authorName));
-          }
-          writeSystemComments(store, current.id, input.authorName, bodies);
-          return {
-            task: apiTask(store, updated),
-            systemCommentsWritten: bodies.length,
-            transitioned: transition.transitioned,
-          };
-        });
-
-        publishTasksChanged(bb, result.task.id, result.task.projectId);
-        if (statusWillChange) {
-          for (const affected of impactTasks) {
-            if (affected.id !== result.task.id) {
-              publishTasksChanged(bb, affected.id, affected.projectId);
+            if (input.labelIds) {
+              replaceTaskLabels(store, current.id, input.labelIds);
             }
-          }
-        }
-        const commentTaskIds = new Set(result.transitioned);
-        if (result.systemCommentsWritten > 0) commentTaskIds.add(result.task.id);
-        for (const taskId of commentTaskIds) publishCommentsChanged(bb, taskId);
-        return { ok: true, task: result.task };
+
+            const bodies: string[] = [];
+            if (updated.status !== current.status) {
+              bodies.push(
+                `Status changed to ${statusName(updated.status)} by ${input.authorName}`,
+              );
+            }
+            if (updated.priority !== current.priority) {
+              bodies.push(
+                `Priority changed to ${priorityName(updated.priority)} by ${input.authorName}`,
+              );
+            }
+            if (updated.dueDate !== current.dueDate) {
+              bodies.push(
+                updated.dueDate === null
+                  ? `Due date removed by ${input.authorName}`
+                  : `Due date changed to ${updated.dueDate} by ${input.authorName}`,
+              );
+            }
+            if (
+              input.labelIds &&
+              labelsChanged(beforeLabelIds, input.labelIds)
+            ) {
+              bodies.push(labelChangeBody(store, current.id, input.authorName));
+            }
+            writeSystemComments(store, current.id, input.authorName, bodies);
+            return {
+              task: updated,
+              systemCommentsWritten: bodies.length,
+            };
+          },
+        );
+        return { ok: true, task };
       } catch (error) {
         if (error instanceof TasksDomainFailure) return taskFailure(error);
         throw error;
@@ -1284,55 +1310,31 @@ export function registerHandlers(
     boardMove(input) {
       const current = store.tasks.getTask(input.taskId);
       if (!current) throw new Error(`Task not found: ${input.taskId}`);
-      const statusWillChange = input.status !== current.status;
-      const impactTasks = statusWillChange
-        ? blockingImpactTasks(store, current.id)
-        : [current];
-      const result = store.transaction(() => {
-        const move = () =>
-          store.tasks.updatePosition(current.id, {
+      const task = runTaskMutationWithBlockingLifecycle(
+        bb,
+        store,
+        current,
+        input.status,
+        input.authorName,
+        () => {
+          const moved = store.tasks.updatePosition(current.id, {
             status: input.status,
             beforeTaskId: input.beforeTaskId,
             afterTaskId: input.afterTaskId,
           });
-        const transition = statusWillChange
-          ? mutateWithBlockingTransitions(
-              store,
-              impactTasks,
-              input.authorName,
-              {
-                kind: "status",
-                changedTask: current,
-                to: input.status,
-              },
-              move,
-            )
-          : { value: move(), transitioned: new Set<string>() };
-        const moved = transition.value;
-        const statusChanged = moved.status !== current.status;
-        if (statusChanged) {
-          writeSystemComments(store, current.id, input.authorName, [
-            `Status changed to ${statusName(moved.status)} by ${input.authorName}`,
-          ]);
-        }
-        return {
-          task: apiTask(store, moved),
-          statusChanged,
-          transitioned: transition.transitioned,
-        };
-      });
-      publishTasksChanged(bb, result.task.id, result.task.projectId);
-      if (result.statusChanged) {
-        for (const affected of impactTasks) {
-          if (affected.id !== result.task.id) {
-            publishTasksChanged(bb, affected.id, affected.projectId);
+          const statusChanged = moved.status !== current.status;
+          if (statusChanged) {
+            writeSystemComments(store, current.id, input.authorName, [
+              `Status changed to ${statusName(moved.status)} by ${input.authorName}`,
+            ]);
           }
-        }
-      }
-      const commentTaskIds = new Set(result.transitioned);
-      if (result.statusChanged) commentTaskIds.add(result.task.id);
-      for (const taskId of commentTaskIds) publishCommentsChanged(bb, taskId);
-      return { ok: true, task: result.task };
+          return {
+            task: moved,
+            systemCommentsWritten: statusChanged ? 1 : 0,
+          };
+        },
+      );
+      return { ok: true, task };
     },
     createLabel(input) {
       const label = store.tasks.createLabel(input);

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { DependencyTask, Task } from "../../shared/contract.js";
 import { useInvalidation, useTasksRpc } from "../../shell/data.js";
 import { useTasksNavigation } from "../../shell/routes.js";
+import { useTasksRefresh } from "../../shell/refresh.js";
 import {
   Popover,
   PopoverContent,
@@ -25,11 +26,19 @@ export function BlockedBadge({
 }) {
   const rpc = useTasksRpc();
   const navigation = useTasksNavigation();
+  const { generation: refreshGeneration } = useTasksRefresh();
   const [open, setOpen] = useState(false);
   const [blockers, setBlockers] = useState<DependencyTask[] | undefined>();
   const [error, setError] = useState<string | null>(null);
+  const [detailsRevision, setDetailsRevision] = useState(0);
+  const requestGeneration = useRef(0);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const invalidateDetails = useCallback(() => {
+    // Increment even when the visible cache is already empty. This both forces
+    // a replacement fetch and prevents an older in-flight response from
+    // repopulating details after invalidation.
+    requestGeneration.current += 1;
+    setDetailsRevision((current) => current + 1);
     setBlockers(undefined);
     setError(null);
   }, []);
@@ -49,17 +58,25 @@ export function BlockedBadge({
 
   useEffect(() => {
     invalidateDetails();
-  }, [invalidateDetails, task.id, task.unresolvedBlockerCount]);
+  }, [
+    invalidateDetails,
+    refreshGeneration,
+    task.id,
+    task.unresolvedBlockerCount,
+  ]);
 
   useEffect(() => {
     if (!open || blockers !== undefined || error !== null) return;
     let active = true;
+    const generation = requestGeneration.current;
     void rpc.call("listTaskDependencies", { taskId: task.id }).then(
       (result) => {
-        if (active) setBlockers(result.blockedBy.filter(isUnresolved));
+        if (active && requestGeneration.current === generation) {
+          setBlockers(result.blockedBy.filter(isUnresolved));
+        }
       },
       (reason: unknown) => {
-        if (active) {
+        if (active && requestGeneration.current === generation) {
           setError(reason instanceof Error ? reason.message : String(reason));
         }
       },
@@ -67,7 +84,7 @@ export function BlockedBadge({
     return () => {
       active = false;
     };
-  }, [blockers, error, open, rpc, task.id]);
+  }, [blockers, detailsRevision, error, open, rpc, task.id]);
 
   useEffect(() => () => cancelClose(), []);
 
@@ -98,7 +115,9 @@ export function BlockedBadge({
           )}
         >
           <Icon name="Lock" className="size-3 shrink-0" />
-          {compact ? task.unresolvedBlockerCount : "Blocked"}
+          {compact
+            ? task.unresolvedBlockerCount
+            : `Blocked · ${task.unresolvedBlockerCount}`}
         </button>
       </PopoverTrigger>
       <PopoverContent
