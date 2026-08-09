@@ -1,6 +1,5 @@
 import { useState } from "react";
 import type {
-  DependencyTask,
   Label,
   Project,
   Task,
@@ -8,13 +7,9 @@ import type {
   TaskStatus,
   TaskThread,
 } from "../../shared/contract.js";
-import {
-  TASK_PRIORITIES,
-  TASK_STATUSES,
-} from "../../shared/contract.js";
+import { TASK_PRIORITIES, TASK_STATUSES } from "../../shared/contract.js";
 import type { Preset } from "../../shared/contract.js";
 import { useTasksQuery, useTasksRpc } from "../../shell/data.js";
-import { useTasksNavigation } from "../../shell/routes.js";
 import {
   PRIORITY_LABELS,
   PriorityIcon,
@@ -48,11 +43,7 @@ import {
   CommandItem,
   CommandList,
 } from "@bb/shared-ui/command";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@bb/shared-ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@bb/shared-ui/popover";
 import { Icon } from "@bb/shared-ui/icon";
 import { cn } from "@bb/shared-ui/lib/utils";
 
@@ -63,8 +54,6 @@ export interface TaskPropertyUpdate {
   labelIds?: string[];
 }
 
-export type DependencyDirection = "blockedBy" | "blocks";
-
 export interface TaskPropertiesProps {
   task: Task;
   project: Project | undefined;
@@ -73,14 +62,7 @@ export interface TaskPropertiesProps {
   onUpdate: (update: TaskPropertyUpdate) => void;
 }
 
-export interface TaskRailProps extends TaskPropertiesProps {
-  blockedBy: DependencyTask[];
-  blocks: DependencyTask[];
-  allTasks: DependencyTask[];
-  dependencyBusy: boolean;
-  onDependencyAdd: (direction: DependencyDirection, candidate: DependencyTask) => void;
-  onDependencyRemove: (direction: DependencyDirection, candidate: DependencyTask) => void;
-}
+export type TaskRailProps = TaskPropertiesProps;
 
 function localIsoDate(daysFromNow: number): string {
   const date = new Date();
@@ -122,10 +104,7 @@ function StatusMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         {TASK_STATUSES.map((status) => (
-          <DropdownMenuItem
-            key={status}
-            onSelect={() => onUpdate({ status })}
-          >
+          <DropdownMenuItem key={status} onSelect={() => onUpdate({ status })}>
             <StatusIcon status={status} />
             {STATUS_LABELS[status]}
             {status === task.status ? (
@@ -474,14 +453,8 @@ export function PropertiesRail({
   labels,
   threads,
   presets,
-  blockedBy,
-  blocks,
-  allTasks,
-  dependencyBusy,
   onUpdate,
   onError,
-  onDependencyAdd,
-  onDependencyRemove,
   className,
 }: TaskRailProps & {
   presets: Preset[] | undefined;
@@ -503,13 +476,21 @@ export function PropertiesRail({
       <h2 className="mb-1.5 text-xs font-semibold text-muted-foreground">
         Properties
       </h2>
-      <StatusMenu task={task} onUpdate={onUpdate} triggerClassName={RAIL_ROW_CLASS} />
+      <StatusMenu
+        task={task}
+        onUpdate={onUpdate}
+        triggerClassName={RAIL_ROW_CLASS}
+      />
       <PriorityMenu
         task={task}
         onUpdate={onUpdate}
         triggerClassName={RAIL_ROW_CLASS}
       />
-      <DueDateMenu task={task} onUpdate={onUpdate} triggerClassName={RAIL_ROW_CLASS} />
+      <DueDateMenu
+        task={task}
+        onUpdate={onUpdate}
+        triggerClassName={RAIL_ROW_CLASS}
+      />
 
       <div className="mb-1 mt-3 text-2xs font-semibold text-muted-foreground">
         Labels
@@ -589,152 +570,7 @@ export function PropertiesRail({
           <span className="text-muted-foreground">none active</span>
         )}
       </div>
-      <div className="mb-1 mt-3 text-2xs font-semibold text-muted-foreground">
-        Dependencies
-      </div>
-      <div className="flex flex-col gap-2 py-0.5">
-        <DependencyMiniList
-          label="Blocked by"
-          direction="blockedBy"
-          task={task}
-          items={blockedBy}
-          candidates={blocks}
-          allTasks={allTasks}
-          busy={dependencyBusy}
-          onAdd={onDependencyAdd}
-          onRemove={onDependencyRemove}
-        />
-        <DependencyMiniList
-          label="Blocks"
-          direction="blocks"
-          task={task}
-          items={blocks}
-          candidates={blockedBy}
-          allTasks={allTasks}
-          busy={dependencyBusy}
-          onAdd={onDependencyAdd}
-          onRemove={onDependencyRemove}
-        />
-      </div>
     </aside>
-  );
-}
-
-function DependencyMiniList({
-  label,
-  direction,
-  task,
-  items,
-  candidates,
-  allTasks,
-  busy,
-  onAdd,
-  onRemove,
-}: {
-  label: string;
-  direction: DependencyDirection;
-  task: Task;
-  items: DependencyTask[];
-  candidates: DependencyTask[];
-  allTasks: DependencyTask[];
-  busy: boolean;
-  onAdd: (direction: DependencyDirection, candidate: DependencyTask) => void;
-  onRemove: (direction: DependencyDirection, candidate: DependencyTask) => void;
-}) {
-  const navigation = useTasksNavigation();
-  const related = new Set([
-    ...items.map((i) => i.task.id),
-    ...candidates.map((i) => i.task.id),
-  ]);
-  const pickerItems = allTasks.filter(
-    (c) => c.task.id !== task.id && !related.has(c.task.id),
-  );
-  const [open, setOpen] = useState(false);
-  return (
-    <div>
-      <div className="mb-0.5 flex items-center justify-between">
-        <span className="text-xs text-muted-foreground">{label}</span>
-        <Popover open={open} onOpenChange={setOpen}>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              aria-label={`Add ${label.toLowerCase()}`}
-              disabled={busy}
-              className="inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground hover:bg-state-hover hover:text-foreground disabled:opacity-40"
-            >
-              <Icon name="Plus" className="size-3" />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent
-            align="end"
-            className="w-[min(22rem,var(--radix-popover-content-available-width))] p-0"
-            mobileTitle={`Add ${label.toLowerCase()}`}
-          >
-            <Command>
-              <CommandInput placeholder="Search by key or title…" />
-              <CommandList>
-                <CommandEmpty>No matching tasks.</CommandEmpty>
-                <CommandGroup>
-                  {pickerItems.map((candidate) => (
-                    <CommandItem
-                      key={candidate.task.id}
-                      value={`${candidate.task.key} ${candidate.task.title} ${candidate.project.name}`}
-                      onSelect={() => {
-                        onAdd(direction, candidate);
-                        setOpen(false);
-                      }}
-                    >
-                      <StatusIcon status={candidate.task.status} />
-                      <span className="shrink-0 text-xs text-muted-foreground">
-                        {candidate.task.key}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate">
-                        {candidate.task.title}
-                      </span>
-                    </CommandItem>
-                  ))}
-                </CommandGroup>
-              </CommandList>
-            </Command>
-          </PopoverContent>
-        </Popover>
-      </div>
-      {items.length === 0 ? (
-        <span className="text-xs text-muted-foreground">—</span>
-      ) : (
-        <div className="flex flex-col gap-0.5">
-          {items.map((item) => (
-            <div
-              key={item.task.id}
-              className="group flex items-center gap-1.5 rounded-sm px-1 py-0.5 text-xs hover:bg-state-hover"
-            >
-              <button
-                type="button"
-                className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-                onClick={() =>
-                  navigation.go({ kind: "task", taskKey: item.task.key })
-                }
-              >
-                <StatusIcon status={item.task.status} className="size-3" />
-                <span className="shrink-0 text-muted-foreground">
-                  {item.task.key}
-                </span>
-                <span className="min-w-0 truncate">{item.task.title}</span>
-              </button>
-              <button
-                type="button"
-                aria-label={`Remove ${label.toLowerCase()} ${item.task.key}`}
-                disabled={busy}
-                className="inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 hover:bg-state-hover hover:text-foreground group-hover:opacity-100 disabled:opacity-40"
-                onClick={() => onRemove(direction, item)}
-              >
-                <Icon name="X" className="size-2.5" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -761,9 +597,21 @@ export function InlineProperties({
   );
   return (
     <div className={cn("flex flex-wrap items-center gap-1.5", className)}>
-      <StatusMenu task={task} onUpdate={onUpdate} triggerClassName={CHIP_CLASS} />
-      <PriorityMenu task={task} onUpdate={onUpdate} triggerClassName={CHIP_CLASS} />
-      <DueDateMenu task={task} onUpdate={onUpdate} triggerClassName={CHIP_CLASS} />
+      <StatusMenu
+        task={task}
+        onUpdate={onUpdate}
+        triggerClassName={CHIP_CLASS}
+      />
+      <PriorityMenu
+        task={task}
+        onUpdate={onUpdate}
+        triggerClassName={CHIP_CLASS}
+      />
+      <DueDateMenu
+        task={task}
+        onUpdate={onUpdate}
+        triggerClassName={CHIP_CLASS}
+      />
       {taskLabels.map((label) => (
         <LabelChip key={label.id} label={label} />
       ))}

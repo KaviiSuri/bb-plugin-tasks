@@ -76,6 +76,8 @@ function detailRpc(
       unavailableThreadIds: [],
     }),
     listComments: () => ({ comments: [] }),
+    listTaskDependencies: () => ({ blockedBy: [], blocks: [] }),
+    listTaskDependencyCandidates: () => ({ blockedBy: [], blocks: [] }),
     listBbProjects: () => ({ bbProjects: [] }),
     ...overrides,
   };

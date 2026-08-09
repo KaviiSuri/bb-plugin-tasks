@@ -29,6 +29,7 @@ import {
   dependencyMutationEndpoints,
   type DependencyDirection,
 } from "./dependencies-model.js";
+import { DependenciesSection } from "./dependencies.js";
 import { DetailToasts, useDetailToasts } from "./toast.js";
 import { Icon } from "@bb/shared-ui/icon";
 import { cn } from "@bb/shared-ui/lib/utils";
@@ -213,19 +214,21 @@ function SubTasksSection({
       ) : null}
       {view === "list"
         ? subtasks.map((subtask) => (
-        <button
-          key={subtask.id}
-          type="button"
-          className="flex h-8 w-full items-center gap-2 border-b border-border-hairline px-0.5 text-left text-sm hover:bg-state-hover"
-          title={STATUS_LABELS[subtask.status]}
-          onClick={() => navigation.go({ kind: "task", taskKey: subtask.key })}
-        >
-          <StatusIcon status={subtask.status} />
-          <span className="shrink-0 text-xs text-muted-foreground">
-            {subtask.key}
-          </span>
-          <span className="min-w-0 truncate">{subtask.title}</span>
-        </button>
+            <button
+              key={subtask.id}
+              type="button"
+              className="flex h-8 w-full items-center gap-2 border-b border-border-hairline px-0.5 text-left text-sm hover:bg-state-hover"
+              title={STATUS_LABELS[subtask.status]}
+              onClick={() =>
+                navigation.go({ kind: "task", taskKey: subtask.key })
+              }
+            >
+              <StatusIcon status={subtask.status} />
+              <span className="shrink-0 text-xs text-muted-foreground">
+                {subtask.key}
+              </span>
+              <span className="min-w-0 truncate">{subtask.title}</span>
+            </button>
           ))
         : null}
       {adding ? (
@@ -309,21 +312,11 @@ function TaskDetail({ task }: { task: Task }) {
     ["projects:changed"],
   );
   const project = projects.data?.find((entry) => entry.id === task.projectId);
-  const allTaskOptions = useTasksQuery<DependencyTask[]>(
-    async (query) => {
-      const [tasks, allProjects] = await Promise.all([
-        listAllTasks(query),
-        query.call("listProjects", {}),
-      ]);
-      const projectsById = new Map(
-        allProjects.projects.map((entry) => [entry.id, entry]),
-      );
-      return tasks.flatMap((entry) => {
-        const entryProject = projectsById.get(entry.projectId);
-        return entryProject ? [{ task: entry, project: entryProject }] : [];
-      });
-    },
+  const dependencyCandidates = useTasksQuery(
+    async (query) =>
+      query.call("listTaskDependencyCandidates", { taskId: task.id }),
     ["tasks:changed", "projects:changed"],
+    [task.id],
   );
   const dependencies = useTasksQuery(
     async (query) => query.call("listTaskDependencies", { taskId: task.id }),
@@ -605,6 +598,24 @@ function TaskDetail({ task }: { task: Task }) {
             onCreate={createSubtask}
           />
 
+          <DependenciesSection
+            blockedBy={dependencies.data?.blockedBy ?? []}
+            blocks={dependencies.data?.blocks ?? []}
+            candidates={
+              dependencyCandidates.data ?? {
+                blockedBy: [],
+                blocks: [],
+              }
+            }
+            busy={dependencyBusy}
+            onAdd={(direction, candidate) =>
+              void mutateDependency("add", direction, candidate)
+            }
+            onRemove={(direction, candidate) =>
+              void mutateDependency("remove", direction, candidate)
+            }
+          />
+
           {/* With no attached threads the section disappears entirely; the
               rail's Dispatch button is the entry point. */}
           {(threads.data ?? []).length > 0 ? (
@@ -632,18 +643,8 @@ function TaskDetail({ task }: { task: Task }) {
           labels={labels.data}
           threads={threads.data ?? []}
           presets={presets.data}
-          blockedBy={dependencies.data?.blockedBy ?? []}
-          blocks={dependencies.data?.blocks ?? []}
-          allTasks={allTaskOptions.data ?? []}
-          dependencyBusy={dependencyBusy}
           onUpdate={(update) => void updateTask(update)}
           onError={(message) => push("error", message)}
-          onDependencyAdd={(direction, candidate) =>
-            void mutateDependency("add", direction, candidate)
-          }
-          onDependencyRemove={(direction, candidate) =>
-            void mutateDependency("remove", direction, candidate)
-          }
           className="hidden @[45rem]:block"
         />
       </div>

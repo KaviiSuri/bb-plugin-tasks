@@ -141,6 +141,8 @@ export const dependencyTaskSchema = z
   })
   .strict();
 
+export const dependencyDirectionSchema = z.enum(["blockedBy", "blocks"]);
+
 export const labelSchema = z
   .object({
     id: idSchema,
@@ -288,7 +290,10 @@ const taskMutationResultSchema = z.discriminatedUnion("ok", [
 
 const dependencyMutationResultSchema = z.discriminatedUnion("ok", [
   z
-    .object({ ok: z.literal(true), dependencies: z.array(taskDependencySchema) })
+    .object({
+      ok: z.literal(true),
+      dependencies: z.array(taskDependencySchema),
+    })
     .strict(),
   z.object({ ok: z.literal(false), error: tasksDomainErrorSchema }).strict(),
 ]);
@@ -538,6 +543,15 @@ export const tasksRpcContract = defineRpcContract({
     output: z.object({ deleted: z.boolean() }).strict(),
   },
   listTaskDependencies: {
+    input: z.object({ taskId: idSchema }).strict(),
+    output: z
+      .object({
+        blockedBy: z.array(dependencyTaskSchema),
+        blocks: z.array(dependencyTaskSchema),
+      })
+      .strict(),
+  },
+  listTaskDependencyCandidates: {
     input: z.object({ taskId: idSchema }).strict(),
     output: z
       .object({
@@ -854,6 +868,10 @@ export type Project = z.infer<typeof projectSchema>;
 export type Task = z.infer<typeof taskSchema>;
 export type TaskDependency = z.infer<typeof taskDependencySchema>;
 export type DependencyTask = z.infer<typeof dependencyTaskSchema>;
+export type DependencyDirection = z.infer<typeof dependencyDirectionSchema>;
+export type DependencyCandidates = z.infer<
+  (typeof tasksRpcContract)["listTaskDependencyCandidates"]["output"]
+>;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 export type Label = z.infer<typeof labelSchema>;

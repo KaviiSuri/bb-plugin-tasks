@@ -2,6 +2,7 @@ import type { BbPluginApi, PluginRpcHandlers } from "@bb/plugin-sdk";
 import {
   createTasksStore,
   TaskDependencyError,
+  type TaskDependency as StoredTaskDependency,
   type Attachment as StoredAttachment,
   type Comment as StoredComment,
   type Task as StoredTask,
@@ -245,6 +246,73 @@ function publishDependencyChanges(
     seen.add(task.id);
     publishTasksChanged(bb, task.id, task.projectId);
     publishCommentsChanged(bb, task.id);
+  }
+}
+
+type DependencyMutationAction = "add" | "remove";
+
+function mutateTaskDependencies(
+  bb: BbPluginApi,
+  store: TasksApiStore,
+  action: DependencyMutationAction,
+  input: {
+    dependentTaskId: string;
+    blockerTaskIds: string[];
+    authorName: string;
+  },
+):
+  | { ok: true; dependencies: StoredTaskDependency[] }
+  | {
+      ok: false;
+      error: { code: TaskDependencyError["code"]; message: string };
+    } {
+  try {
+    const dependent = store.tasks.getTask(input.dependentTaskId);
+    if (!dependent) {
+      throw new TaskDependencyError(
+        "dependency_endpoint_not_found",
+        `Dependent task not found: ${input.dependentTaskId}`,
+      );
+    }
+    const blockers = input.blockerTaskIds.map((taskId) => {
+      const blocker = store.tasks.getTask(taskId);
+      if (!blocker) {
+        throw new TaskDependencyError(
+          "dependency_endpoint_not_found",
+          `Blocker task not found: ${taskId}`,
+        );
+      }
+      return blocker;
+    });
+    const pastTense = action === "add" ? "added" : "removed";
+    const dependencies = store.transaction(() => {
+      const changed =
+        action === "add"
+          ? store.tasks.addTaskDependencies(dependent.id, input.blockerTaskIds)
+          : store.tasks.removeTaskDependencies(
+              dependent.id,
+              input.blockerTaskIds,
+            );
+      for (const blocker of blockers) {
+        writeSystemComments(store, dependent.id, input.authorName, [
+          `Blocked by ${blocker.key} ${pastTense} by ${input.authorName}`,
+        ]);
+        writeSystemComments(store, blocker.id, input.authorName, [
+          `Blocks ${dependent.key} ${pastTense} by ${input.authorName}`,
+        ]);
+      }
+      return changed;
+    });
+    publishDependencyChanges(bb, [dependent, ...blockers]);
+    return { ok: true, dependencies };
+  } catch (error) {
+    if (error instanceof TaskDependencyError) {
+      return {
+        ok: false,
+        error: { code: error.code, message: error.message },
+      };
+    }
+    throw error;
   }
 }
 
@@ -870,91 +938,24 @@ export function registerHandlers(
         ),
       };
     },
+    listTaskDependencyCandidates(input) {
+      const candidates = store.tasks.listTaskDependencyCandidateIds(
+        input.taskId,
+      );
+      return {
+        blockedBy: candidates.blockedBy.map((taskId) =>
+          dependencyTask(store, taskId),
+        ),
+        blocks: candidates.blocks.map((taskId) =>
+          dependencyTask(store, taskId),
+        ),
+      };
+    },
     addTaskDependencies(input) {
-      try {
-        const dependent = store.tasks.getTask(input.dependentTaskId);
-        if (!dependent) {
-          throw new TaskDependencyError(
-            "dependency_endpoint_not_found",
-            `Dependent task not found: ${input.dependentTaskId}`,
-          );
-        }
-        const blockers = input.blockerTaskIds.map((taskId) => {
-          const blocker = store.tasks.getTask(taskId);
-          if (!blocker) {
-            throw new TaskDependencyError(
-              "dependency_endpoint_not_found",
-              `Blocker task not found: ${taskId}`,
-            );
-          }
-          return blocker;
-        });
-        const dependencies = store.transaction(() => {
-          const added = store.tasks.addTaskDependencies(
-            dependent.id,
-            blockers.map((blocker) => blocker.id),
-          );
-          for (const blocker of blockers) {
-            writeSystemComments(store, dependent.id, input.authorName, [
-              `Blocked by ${blocker.key} added by ${input.authorName}`,
-            ]);
-            writeSystemComments(store, blocker.id, input.authorName, [
-              `Blocks ${dependent.key} added by ${input.authorName}`,
-            ]);
-          }
-          return added;
-        });
-        publishDependencyChanges(bb, [dependent, ...blockers]);
-        return { ok: true, dependencies };
-      } catch (error) {
-        if (error instanceof TaskDependencyError) {
-          return { ok: false, error: { code: error.code, message: error.message } };
-        }
-        throw error;
-      }
+      return mutateTaskDependencies(bb, store, "add", input);
     },
     removeTaskDependencies(input) {
-      try {
-        const dependent = store.tasks.getTask(input.dependentTaskId);
-        if (!dependent) {
-          throw new TaskDependencyError(
-            "dependency_endpoint_not_found",
-            `Dependent task not found: ${input.dependentTaskId}`,
-          );
-        }
-        const blockers = input.blockerTaskIds.map((taskId) => {
-          const blocker = store.tasks.getTask(taskId);
-          if (!blocker) {
-            throw new TaskDependencyError(
-              "dependency_endpoint_not_found",
-              `Blocker task not found: ${taskId}`,
-            );
-          }
-          return blocker;
-        });
-        const dependencies = store.transaction(() => {
-          const removed = store.tasks.removeTaskDependencies(
-            dependent.id,
-            blockers.map((blocker) => blocker.id),
-          );
-          for (const blocker of blockers) {
-            writeSystemComments(store, dependent.id, input.authorName, [
-              `Blocked by ${blocker.key} removed by ${input.authorName}`,
-            ]);
-            writeSystemComments(store, blocker.id, input.authorName, [
-              `Blocks ${dependent.key} removed by ${input.authorName}`,
-            ]);
-          }
-          return removed;
-        });
-        publishDependencyChanges(bb, [dependent, ...blockers]);
-        return { ok: true, dependencies };
-      } catch (error) {
-        if (error instanceof TaskDependencyError) {
-          return { ok: false, error: { code: error.code, message: error.message } };
-        }
-        throw error;
-      }
+      return mutateTaskDependencies(bb, store, "remove", input);
     },
     listTasks(input) {
       const page = store.tasks.listTasksPage({

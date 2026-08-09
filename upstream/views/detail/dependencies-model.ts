@@ -1,20 +1,16 @@
-import type { DependencyTask, Task } from "../../shared/contract.js";
+import type {
+  DependencyCandidates,
+  DependencyDirection,
+} from "../../shared/contract.js";
 
-export type DependencyDirection = "blockedBy" | "blocks";
+export type { DependencyDirection } from "../../shared/contract.js";
 
+/** Select the server-filtered candidates for one reciprocal presentation. */
 export function dependencyCandidates(
-  task: Task,
-  allTasks: readonly DependencyTask[],
-  blockedBy: readonly DependencyTask[],
-  blocks: readonly DependencyTask[],
+  candidates: DependencyCandidates,
   direction: DependencyDirection,
-): DependencyTask[] {
-  const related = new Set(
-    (direction === "blockedBy" ? blockedBy : blocks).map((item) => item.task.id),
-  );
-  return allTasks.filter(
-    (candidate) => candidate.task.id !== task.id && !related.has(candidate.task.id),
-  );
+) {
+  return candidates[direction];
 }
 
 export function dependencyMutationEndpoints(

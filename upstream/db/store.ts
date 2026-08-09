@@ -799,6 +799,64 @@ export function createTasksStore(db: PluginDatabase) {
     }
   }
 
+  function dependencyGraph(): Map<string, Set<string>> {
+    const graph = new Map<string, Set<string>>();
+    const edges = db
+      .prepare<[], TaskDependencyRow>("SELECT * FROM task_dependencies")
+      .all();
+    for (const edge of edges) {
+      const targets = graph.get(edge.dependent_task_id) ?? new Set<string>();
+      targets.add(edge.blocker_task_id);
+      graph.set(edge.dependent_task_id, targets);
+    }
+    return graph;
+  }
+
+  function graphReaches(
+    graph: ReadonlyMap<string, ReadonlySet<string>>,
+    fromTaskId: string,
+    targetTaskId: string,
+  ): boolean {
+    const pending = [fromTaskId];
+    const visited = new Set<string>();
+    while (pending.length > 0) {
+      const current = pending.pop()!;
+      if (current === targetTaskId) return true;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      pending.push(...(graph.get(current) ?? []));
+    }
+    return false;
+  }
+
+  /** Candidate ids that cannot immediately violate self/duplicate/cycle rules. */
+  function listTaskDependencyCandidateIds(taskId: string): {
+    blockedBy: string[];
+    blocks: string[];
+  } {
+    requireTask(taskId);
+    const graph = dependencyGraph();
+    const tasks = listTasks({});
+    return {
+      blockedBy: tasks
+        .filter(
+          (candidate) =>
+            candidate.id !== taskId &&
+            !graph.get(taskId)?.has(candidate.id) &&
+            !graphReaches(graph, candidate.id, taskId),
+        )
+        .map((candidate) => candidate.id),
+      blocks: tasks
+        .filter(
+          (candidate) =>
+            candidate.id !== taskId &&
+            !graph.get(candidate.id)?.has(taskId) &&
+            !graphReaches(graph, taskId, candidate.id),
+        )
+        .map((candidate) => candidate.id),
+    };
+  }
+
   const addTaskDependenciesTransaction = db.transaction(
     (
       dependentTaskId: string,
@@ -906,7 +964,9 @@ export function createTasksStore(db: PluginDatabase) {
       for (const blockerTaskId of blockerTaskIds) {
         remove.run(dependentTaskId, blockerTaskId);
       }
-      return blockerTaskIds.map((blockerTaskId) => existing.get(blockerTaskId)!);
+      return blockerTaskIds.map(
+        (blockerTaskId) => existing.get(blockerTaskId)!,
+      );
     },
   );
 
@@ -2024,6 +2084,7 @@ export function createTasksStore(db: PluginDatabase) {
     updatePosition,
     deleteTask,
     listTaskDependencies,
+    listTaskDependencyCandidateIds,
     addTaskDependencies,
     removeTaskDependencies,
     createLabel,

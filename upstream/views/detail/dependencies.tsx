@@ -1,9 +1,10 @@
 import { useState } from "react";
-import type { DependencyTask, Task } from "../../shared/contract.js";
-import {
-  dependencyCandidates,
-  type DependencyDirection,
-} from "./dependencies-model.js";
+import type {
+  DependencyCandidates,
+  DependencyTask,
+  DependencyDirection,
+} from "../../shared/contract.js";
+import { dependencyCandidates } from "./dependencies-model.js";
 import { useTasksNavigation } from "../../shell/routes.js";
 import { STATUS_LABELS, StatusIcon } from "./meta.js";
 import {
@@ -14,11 +15,7 @@ import {
   CommandItem,
   CommandList,
 } from "@bb/shared-ui/command";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@bb/shared-ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@bb/shared-ui/popover";
 import { Icon } from "@bb/shared-ui/icon";
 
 export type { DependencyDirection } from "./dependencies-model.js";
@@ -103,7 +100,9 @@ function DependencyCollection({
   const navigation = useTasksNavigation();
   return (
     <div className="min-w-0 flex-1">
-      <h2 className="mb-1 text-xs font-semibold text-muted-foreground">{title}</h2>
+      <h2 className="mb-1 text-xs font-semibold text-muted-foreground">
+        {title}
+      </h2>
       {items.map((item) => (
         <div
           key={item.task.id}
@@ -121,9 +120,20 @@ function DependencyCollection({
             <span className="shrink-0 text-xs text-muted-foreground">
               {item.task.key}
             </span>
-            <span className="min-w-0 flex-1 truncate">{item.task.title}</span>
+            <span
+              className={
+                item.task.status === "done" || item.task.status === "canceled"
+                  ? "min-w-0 flex-1 truncate text-muted-foreground line-through"
+                  : "min-w-0 flex-1 truncate"
+              }
+            >
+              {item.task.title}
+            </span>
             <span className="max-w-28 truncate text-2xs text-muted-foreground">
               {item.project.name}
+              {item.task.status === "done" || item.task.status === "canceled"
+                ? ` · ${STATUS_LABELS[item.task.status]}`
+                : ""}
             </span>
           </button>
           <button
@@ -147,29 +157,33 @@ function DependencyCollection({
 }
 
 export function DependenciesSection({
-  task,
   blockedBy,
   blocks,
-  allTasks,
+  candidates,
   busy,
   onAdd,
   onRemove,
 }: {
-  task: Task;
   blockedBy: DependencyTask[];
   blocks: DependencyTask[];
-  allTasks: DependencyTask[];
+  candidates: DependencyCandidates;
   busy: boolean;
   onAdd: (direction: DependencyDirection, candidate: DependencyTask) => void;
   onRemove: (direction: DependencyDirection, candidate: DependencyTask) => void;
 }) {
   return (
-    <section className="mt-6 grid gap-5 border-t border-border-hairline pt-5 @[36rem]:grid-cols-2">
+    <section
+      aria-label="Dependencies"
+      className="mt-6 grid gap-5 border-t border-border-hairline pt-5 @[36rem]:grid-cols-2"
+    >
+      <h2 className="text-sm font-semibold @[36rem]:col-span-2">
+        Dependencies
+      </h2>
       <DependencyCollection
         title="Blocked by"
         direction="blockedBy"
         items={blockedBy}
-        candidates={dependencyCandidates(task, allTasks, blockedBy, blocks, "blockedBy")}
+        candidates={dependencyCandidates(candidates, "blockedBy")}
         busy={busy}
         onAdd={onAdd}
         onRemove={onRemove}
@@ -178,7 +192,7 @@ export function DependenciesSection({
         title="Blocks"
         direction="blocks"
         items={blocks}
-        candidates={dependencyCandidates(task, allTasks, blockedBy, blocks, "blocks")}
+        candidates={dependencyCandidates(candidates, "blocks")}
         busy={busy}
         onAdd={onAdd}
         onRemove={onRemove}

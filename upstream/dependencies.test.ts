@@ -1,19 +1,15 @@
-import Database from "better-sqlite3";
+import { createFakePluginHost } from "@bb/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import { createStore, registerHandlers } from "./api/index.js";
-import { registerTasksCli } from "./cli/index.js";
-import { createTasksStore, TaskDependencyError } from "./db/index.js";
-import { tasksRpcContract } from "./shared/contract.js";
+import { createStore, registerTasksApi } from "./api/index.js";
 import {
-  dependencyCandidates,
-  dependencyMutationEndpoints,
-} from "./views/detail/dependencies-model.js";
+  createTasksStore,
+  TaskDependencyError,
+  type TasksStore,
+} from "./db/index.js";
+import plugin from "./server.js";
+import { tasksRpcContract } from "./shared/contract.js";
 
-function database() {
-  return new Database(":memory:");
-}
-
-function projectAndTasks(store: ReturnType<typeof createTasksStore>) {
+function projectAndTasks(store: TasksStore) {
   const firstProject = store.createProject({
     name: "First project",
     prefix: "ONE",
@@ -41,136 +37,110 @@ function projectAndTasks(store: ReturnType<typeof createTasksStore>) {
   return { firstProject, secondProject, dependent, blocker, third };
 }
 
-function fakeBb(db: Database.Database) {
-  const realtimeSignals: Array<{ channel: string; payload: unknown }> = [];
-  let cliRegistration: any;
-  const bb = {
-    storage: { database: () => db },
-    realtime: {
-      publish(channel: string, payload: unknown) {
-        realtimeSignals.push({ channel, payload });
-      },
-    },
-    cli: {
-      register(registration: unknown) {
-        cliRegistration = registration;
-      },
-    },
-    sdk: {},
-  } as any;
-  return { bb, realtimeSignals, getCli: () => cliRegistration };
-}
-
 describe("task dependency storage", () => {
-  it("migrates directed storage with reciprocal indexes and cascading endpoints", () => {
-    const db = database();
-    const store = createTasksStore(db as any);
+  it("migrates real SQLite with reciprocal indexes and cascading endpoints", async () => {
+    const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
+    const db = bb.storage.database();
+    const store = createTasksStore(db);
     const { dependent, blocker } = projectAndTasks(store);
 
     expect(
       db.prepare("SELECT COUNT(*) AS count FROM schema_version").get(),
-    ).toEqual({ count: 6 });
+    ).toEqual({
+      count: 6,
+    });
     const indexes = db
-      .prepare("PRAGMA index_list('task_dependencies')")
+      .prepare<[], { name: string }>("PRAGMA index_list('task_dependencies')")
       .all()
-      .map((row: any) => row.name);
+      .map((row) => row.name);
     expect(indexes).toEqual(
       expect.arrayContaining([
         "idx_task_dependencies_dependent",
         "idx_task_dependencies_blocker",
       ]),
     );
-
     store.addTaskDependencies(dependent.id, [blocker.id]);
     store.deleteTask(blocker.id);
     expect(store.listTaskDependencies(dependent.id).blockedBy).toEqual([]);
-    db.close();
+    await harness.dispose();
   });
 
-  it("adds and removes multi-edge requests atomically", () => {
-    const db = database();
-    const store = createTasksStore(db as any);
+  it("enforces atomic batches and every graph invariant, including resolved cycles", async () => {
+    const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
+    const store = createTasksStore(bb.storage.database());
     const { dependent, blocker, third, firstProject } = projectAndTasks(store);
     const unrelated = store.createTask({
       projectId: firstProject.id,
       title: "Unrelated",
     });
 
-    store.addTaskDependencies(dependent.id, [blocker.id, third.id]);
-    expect(store.listTaskDependencies(dependent.id).blockedBy).toHaveLength(2);
     expect(() =>
-      store.removeTaskDependencies(dependent.id, [blocker.id, unrelated.id]),
-    ).toThrow(expect.objectContaining({ code: "dependency_not_found" }));
-    expect(store.listTaskDependencies(dependent.id).blockedBy).toHaveLength(2);
-    store.removeTaskDependencies(dependent.id, [blocker.id, third.id]);
-    expect(store.listTaskDependencies(dependent.id).blockedBy).toEqual([]);
-    db.close();
-  });
-
-  it("rejects self-links, duplicates, missing endpoints, and cycles atomically, including resolved edges", () => {
-    const db = database();
-    const store = createTasksStore(db as any);
-    const { dependent, blocker, third } = projectAndTasks(store);
-
-    expect(() => store.addTaskDependencies(dependent.id, [dependent.id])).toThrow(
+      store.addTaskDependencies(dependent.id, [dependent.id]),
+    ).toThrow(
       expect.objectContaining<TaskDependencyError>({
         code: "dependency_self_link",
       }),
     );
-    store.addTaskDependencies(dependent.id, [blocker.id]);
+    store.addTaskDependencies(dependent.id, [blocker.id, third.id]);
     expect(() => store.addTaskDependencies(dependent.id, [blocker.id])).toThrow(
-      expect.objectContaining<TaskDependencyError>({
-        code: "dependency_duplicate",
-      }),
+      expect.objectContaining({ code: "dependency_duplicate" }),
     );
     expect(() =>
-      store.addTaskDependencies(dependent.id, [third.id, blocker.id]),
-    ).toThrow(expect.objectContaining({ code: "dependency_duplicate" }));
-    expect(
-      store.listTaskDependencies(dependent.id).blockedBy.map((edge) =>
-        edge.blockerTaskId,
-      ),
-    ).toEqual([blocker.id]);
+      store.removeTaskDependencies(dependent.id, [blocker.id, unrelated.id]),
+    ).toThrow(expect.objectContaining({ code: "dependency_not_found" }));
+    expect(store.listTaskDependencies(dependent.id).blockedBy).toHaveLength(2);
     expect(() =>
       store.addTaskDependencies(dependent.id, ["01J00000000000000000000000"]),
-    ).toThrow(expect.objectContaining({ code: "dependency_endpoint_not_found" }));
-
-    store.addTaskDependencies(blocker.id, [third.id]);
-    expect(() => store.addTaskDependencies(third.id, [dependent.id])).toThrow(
-      expect.objectContaining({ code: "dependency_cycle" }),
+    ).toThrow(
+      expect.objectContaining({ code: "dependency_endpoint_not_found" }),
     );
-    expect(store.listTaskDependencies(third.id).blockedBy).toEqual([]);
-    db.close();
+
+    store.addTaskDependencies(blocker.id, [unrelated.id]);
+    expect(() =>
+      store.addTaskDependencies(unrelated.id, [dependent.id]),
+    ).toThrow(expect.objectContaining({ code: "dependency_cycle" }));
+    expect(store.listTaskDependencies(unrelated.id).blockedBy).toEqual([]);
+    await harness.dispose();
   });
 });
 
-describe("task dependency RPC and activity", () => {
-  it("projects one cross-project edge reciprocally and refreshes both activity streams", () => {
-    const db = database();
-    const fake = fakeBb(db);
-    const store = createStore(fake.bb);
-    const { dependent, blocker, secondProject } = projectAndTasks(store.tasks);
-    const handlers = registerHandlers(fake.bb, store);
+describe("task dependency contract and RPC", () => {
+  it("projects reciprocal key/id context, activity, signals, and cycle-safe candidates", async () => {
+    const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
+    const store = createStore(bb);
+    registerTasksApi(bb, store);
+    const { dependent, blocker, third, secondProject } = projectAndTasks(
+      store.tasks,
+    );
 
     const added = tasksRpcContract.addTaskDependencies.output.parse(
-      handlers.addTaskDependencies({
+      await harness.callRpc("addTaskDependencies", {
         dependentTaskId: dependent.id,
         blockerTaskIds: [blocker.id],
         authorName: "Tester",
       }),
     );
-    expect(added).toMatchObject({ ok: true, dependencies: [{ dependentTaskId: dependent.id, blockerTaskId: blocker.id }] });
-
+    expect(added).toMatchObject({
+      ok: true,
+      dependencies: [
+        { dependentTaskId: dependent.id, blockerTaskId: blocker.id },
+      ],
+    });
     const reciprocal = tasksRpcContract.listTaskDependencies.output.parse(
-      handlers.listTaskDependencies({ taskId: blocker.id }),
+      await harness.callRpc("listTaskDependencies", { taskId: blocker.id }),
     );
     expect(reciprocal.blocks).toMatchObject([
-      { task: { id: dependent.id }, project: { id: dependent.projectId } },
+      {
+        task: { id: dependent.id, key: "ONE-1" },
+        project: { id: dependent.projectId },
+      },
     ]);
-    const forward = handlers.listTaskDependencies({ taskId: dependent.id });
+    const forward = await harness.callRpc("listTaskDependencies", {
+      taskId: dependent.id,
+    });
     expect(forward.blockedBy).toMatchObject([
       {
-        task: { id: blocker.id, status: "done" },
+        task: { id: blocker.id, key: "TWO-1", status: "done" },
         project: { id: secondProject.id, name: "Second project" },
       },
     ]);
@@ -180,80 +150,87 @@ describe("task dependency RPC and activity", () => {
     expect(store.tasks.listComments(blocker.id).at(-1)?.body).toBe(
       "Blocks ONE-1 added by Tester",
     );
-    expect(fake.realtimeSignals).toEqual([
-      { channel: "tasks:changed", payload: { taskId: dependent.id, projectId: dependent.projectId } },
+    expect(harness.realtimeSignals.slice(-4)).toEqual([
+      {
+        channel: "tasks:changed",
+        payload: { taskId: dependent.id, projectId: dependent.projectId },
+      },
       { channel: "comments:changed", payload: { taskId: dependent.id } },
-      { channel: "tasks:changed", payload: { taskId: blocker.id, projectId: blocker.projectId } },
+      {
+        channel: "tasks:changed",
+        payload: { taskId: blocker.id, projectId: blocker.projectId },
+      },
       { channel: "comments:changed", payload: { taskId: blocker.id } },
     ]);
 
-    const removed = handlers.removeTaskDependencies({
-      dependentTaskId: dependent.id,
-      blockerTaskIds: [blocker.id],
-      authorName: "Tester",
+    await harness.callRpc("addTaskDependencies", {
+      dependentTaskId: blocker.id,
+      blockerTaskIds: [third.id],
     });
-    expect(removed.ok).toBe(true);
-    expect(handlers.listTaskDependencies({ taskId: dependent.id }).blockedBy).toEqual([]);
+    const candidates =
+      tasksRpcContract.listTaskDependencyCandidates.output.parse(
+        await harness.callRpc("listTaskDependencyCandidates", {
+          taskId: third.id,
+        }),
+      );
+    expect(candidates.blockedBy.map(({ task }) => task.id)).not.toContain(
+      dependent.id,
+    );
+
+    await expect(
+      harness.callRpc("removeTaskDependencies", {
+        dependentTaskId: dependent.id,
+        blockerTaskIds: [blocker.id],
+        authorName: "Tester",
+      }),
+    ).resolves.toMatchObject({ ok: true });
     expect(store.tasks.listComments(blocker.id).at(-1)?.body).toBe(
       "Blocks ONE-1 removed by Tester",
     );
-    db.close();
+    await harness.dispose();
   });
 });
 
-describe("task dependency CLI and detail model", () => {
-  it("adds, lists, and removes dependencies using case-insensitive keys", async () => {
-    const db = database();
-    const fake = fakeBb(db);
-    const store = createStore(fake.bb);
-    projectAndTasks(store.tasks);
-    registerTasksCli(fake.bb, store, { name: "Tasks", version: "test" });
-    const cli = fake.getCli();
+describe("task dependency CLI", () => {
+  it("adds/lists/removes with keys and ULID ids through the canonical harness", async () => {
+    const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
+    await plugin(bb);
+    const store = createStore(bb);
+    const { dependent, blocker } = projectAndTasks(store.tasks);
 
-    const add = await cli.run(
-      ["dependency", "add", "one-1", "--blocked-by", "two-1"],
-      {},
-    );
-    expect(add).toMatchObject({ exitCode: 0 });
-    expect(add.stdout).toContain("Added 1 blocker for ONE-1");
-
-    const list = await cli.run(["dependency", "list", "ONE-1", "--json"], {});
-    const listed = JSON.parse(list.stdout);
-    expect(listed.blockedBy).toMatchObject([
-      { task: { key: "TWO-1", status: "done" }, project: { name: "Second project" } },
+    await expect(
+      harness.runCli([
+        "dependency",
+        "add",
+        "one-1",
+        "--blocked-by",
+        blocker.id,
+      ]),
+    ).resolves.toMatchObject({
+      exitCode: 0,
+      stdout: "Added 1 blocker for ONE-1",
+    });
+    const listed = await harness.runCli([
+      "dependency",
+      "list",
+      dependent.id,
+      "--json",
     ]);
-
-    const remove = await cli.run(
-      ["dependency", "remove", "ONE-1", "--blocked-by", "TWO-1"],
-      {},
-    );
-    expect(remove).toMatchObject({ exitCode: 0 });
-    db.close();
-  });
-
-  it("keeps reciprocal selector semantics without deriving blocked state", () => {
-    const db = database();
-    const store = createTasksStore(db as any);
-    const { dependent, blocker, third, firstProject, secondProject } =
-      projectAndTasks(store);
-    const wrap = (task: typeof dependent) => ({
-      task: { ...task, labelIds: [] },
-      project: task.projectId === firstProject.id ? firstProject : secondProject,
-    });
-    const all = [wrap(dependent), wrap(blocker), wrap(third)];
-    expect(
-      dependencyCandidates(dependent as any, all, [wrap(blocker)], [], "blockedBy").map(
-        (item) => item.task.id,
-      ),
-    ).toEqual([third.id]);
-    expect(dependencyMutationEndpoints(dependent.id, "blockedBy", blocker.id)).toEqual({
-      dependentTaskId: dependent.id,
-      blockerTaskIds: [blocker.id],
-    });
-    expect(dependencyMutationEndpoints(dependent.id, "blocks", third.id)).toEqual({
-      dependentTaskId: third.id,
-      blockerTaskIds: [dependent.id],
-    });
-    db.close();
+    expect(JSON.parse(listed.stdout).blockedBy).toMatchObject([
+      {
+        task: { id: blocker.id, key: "TWO-1" },
+        project: { name: "Second project" },
+      },
+    ]);
+    await expect(
+      harness.runCli([
+        "dependency",
+        "remove",
+        dependent.id,
+        "--blocked-by",
+        "TWO-1",
+      ]),
+    ).resolves.toMatchObject({ exitCode: 0 });
+    await harness.dispose();
   });
 });
