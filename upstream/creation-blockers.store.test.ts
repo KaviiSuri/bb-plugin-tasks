@@ -10,6 +10,39 @@ import { groupBlockerCandidates } from "./views/manage/blocker-picker-model.js";
 
 type Store = ReturnType<typeof createTasksStore>;
 
+interface QueryPlanRow {
+  id: number;
+  parent: number;
+  detail: string;
+}
+
+function phasePlan(
+  plan: readonly QueryPlanRow[],
+  phase: string,
+): QueryPlanRow[] {
+  const root = plan.find(
+    (row) => row.detail.startsWith("CO-ROUTINE ") && row.detail.endsWith(phase),
+  );
+  expect(root, `query plan phase ${phase}`).toBeDefined();
+  const included = new Set([root!.id]);
+  let previousSize = -1;
+  while (included.size !== previousSize) {
+    previousSize = included.size;
+    for (const row of plan) {
+      if (included.has(row.parent)) included.add(row.id);
+    }
+  }
+  return plan.filter((row) => included.has(row.id));
+}
+
+function usesIndex(plan: readonly QueryPlanRow[], indexName: string): boolean {
+  return plan.some((row) => row.detail.includes(indexName));
+}
+
+function broadlyScansTasks(plan: readonly QueryPlanRow[]): boolean {
+  return plan.some((row) => /^SCAN t(?:\s|$)/.test(row.detail));
+}
+
 function setup() {
   const db = new Database(":memory:");
   return { db, store: createTasksStore(db) };
@@ -152,9 +185,10 @@ describe("creation blocker contract and store search", () => {
         .candidates.map((task) => task.id),
     ).toEqual([otherMatch.id]);
     const plan = db
-      .prepare<BlockerCandidateQueryParameters, { detail: string }>(
-        `EXPLAIN QUERY PLAN ${BLOCKER_CANDIDATE_QUERY}`,
-      )
+      .prepare<
+        BlockerCandidateQueryParameters,
+        QueryPlanRow
+      >(`EXPLAIN QUERY PLAN ${BLOCKER_CANDIDATE_QUERY}`)
       .all({
         currentProjectId: data.currentProject.id,
         dependentTaskId: null,
@@ -162,25 +196,25 @@ describe("creation blocker contract and store search", () => {
         query: "",
         search: "%%",
         candidateLimit: 2,
-      })
-      .map((row) => row.detail);
-    expect(
-      plan.filter((detail) => detail.startsWith("CO-ROUTINE ")),
-    ).toHaveLength(4);
-    expect(plan).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining(
-          "SEARCH t USING INDEX idx_tasks_blocker_project (project_id=? AND <expr>=?)",
-        ),
-        expect.stringContaining(
-          "SCAN p USING INDEX idx_projects_blocker_candidates",
-        ),
-        expect.stringContaining(
-          "SEARCH dependency USING COVERING INDEX idx_task_dependencies_blocker",
-        ),
-      ]),
-    );
-    expect(plan.some((detail) => /^SCAN t(?:$| )/.test(detail))).toBe(false);
+      });
+    for (const phase of ["current_active", "current_terminal"]) {
+      const rows = phasePlan(plan, phase);
+      expect(usesIndex(rows, "idx_tasks_blocker_project"), phase).toBe(true);
+      expect(broadlyScansTasks(rows), phase).toBe(false);
+      expect(
+        rows.some((row) => row.detail.startsWith("USE TEMP B-TREE")),
+        phase,
+      ).toBe(false);
+    }
+    for (const phase of ["other_active", "other_terminal"]) {
+      const rows = phasePlan(plan, phase);
+      expect(usesIndex(rows, "idx_projects_blocker_candidates"), phase).toBe(
+        true,
+      );
+      expect(usesIndex(rows, "idx_tasks_blocker_project"), phase).toBe(true);
+      expect(broadlyScansTasks(rows), phase).toBe(false);
+    }
+    expect(usesIndex(plan, "idx_task_dependencies_blocker")).toBe(true);
     db.close();
   });
 
