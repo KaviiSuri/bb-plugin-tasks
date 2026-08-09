@@ -54,7 +54,7 @@ describe("task dependency storage", () => {
     expect(
       db.prepare("SELECT COUNT(*) AS count FROM schema_version").get(),
     ).toEqual({
-      count: 6,
+      count: 7,
     });
     const indexes = db
       .prepare<[], { name: string }>("PRAGMA index_list('task_dependencies')")

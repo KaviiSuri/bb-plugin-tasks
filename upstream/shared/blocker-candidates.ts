@@ -7,8 +7,10 @@ export interface BlockerCandidateSortFacts {
   key: string;
 }
 
+export const TERMINAL_TASK_STATUSES = ["done", "canceled"] as const;
+
 export function isTerminalTaskStatus(status: TaskStatus): boolean {
-  return status === "done" || status === "canceled";
+  return TERMINAL_TASK_STATUSES.some((terminal) => terminal === status);
 }
 
 /** Active tasks always lead terminal tasks; the selected project is favored

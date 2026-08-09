@@ -9,7 +9,7 @@ import {
   type TaskSort,
 } from "../shared/pagination.js";
 import { presetPermissionModeSchema } from "../shared/contract.js";
-import { compareBlockerCandidateFacts } from "../shared/blocker-candidates.js";
+import { TERMINAL_TASK_STATUSES } from "../shared/blocker-candidates.js";
 import type {
   Attachment,
   Comment,
@@ -1029,34 +1029,45 @@ export function createTasksStore(db: PluginDatabase) {
       ...invalidTaskIds,
       ...selected.map((task) => task.id),
     ]);
-    const query = input.query?.trim().toLocaleLowerCase() ?? "";
-    const limit = input.limit ?? 50;
-    const projects = new Map(
-      listProjects().map((project) => [project.id, project] as const),
-    );
-    const facts = (task: Task) => ({
-      status: task.status,
-      projectId: task.projectId,
-      projectName: projects.get(task.projectId)?.name ?? "",
-      key: task.key,
-    });
-
-    const candidates = listTasks()
-      .filter((task) => !excludedTaskIds.has(task.id))
-      .filter(
-        (task) =>
-          query === "" ||
-          task.key.toLocaleLowerCase().includes(query) ||
-          task.title.toLocaleLowerCase().includes(query),
+    const query = input.query?.trim() ?? "";
+    const parameters: Record<string, SqlParameter> = {
+      currentProjectId: input.projectId,
+      terminalStatus0: TERMINAL_TASK_STATUSES[0],
+      terminalStatus1: TERMINAL_TASK_STATUSES[1],
+      candidateLimit: input.limit ?? 50,
+    };
+    const clauses: string[] = [];
+    if (query !== "") {
+      parameters.search = `%${escapeLike(query)}%`;
+      clauses.push(`(
+        t.title LIKE @search ESCAPE '\\'
+        OR (p.prefix || '-' || t.number) LIKE @search ESCAPE '\\'
+      )`);
+    }
+    if (excludedTaskIds.size > 0) {
+      const names = [...excludedTaskIds].map((taskId, index) => {
+        const name = `excluded${index}`;
+        parameters[name] = taskId;
+        return `@${name}`;
+      });
+      clauses.push(`t.id NOT IN (${names.join(", ")})`);
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const candidates = db
+      .prepare<Record<string, SqlParameter>, TaskRow>(
+        `${taskSelect}
+         ${where}
+         ORDER BY
+           CASE WHEN t.status IN (@terminalStatus0, @terminalStatus1)
+             THEN 1 ELSE 0 END,
+           CASE WHEN t.project_id = @currentProjectId THEN 0 ELSE 1 END,
+           p.name COLLATE NOCASE,
+           t.number,
+           t.id
+         LIMIT @candidateLimit`,
       )
-      .sort((left, right) =>
-        compareBlockerCandidateFacts(
-          facts(left),
-          facts(right),
-          input.projectId,
-        ),
-      )
-      .slice(0, limit);
+      .all(parameters)
+      .map(taskFromRow);
     return { candidates, selected };
   }
 
