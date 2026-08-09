@@ -314,6 +314,8 @@ function mutateTaskDependencies(
     }
     throw error;
   }
+}
+
 /** Resolve, add, and record reciprocal activity as one caller-owned write.
  * Callers must invoke this inside store.transaction so task creation and the
  * regular dependency API share exactly the same mutation semantics. */
