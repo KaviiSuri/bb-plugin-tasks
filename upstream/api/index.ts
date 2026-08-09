@@ -335,22 +335,23 @@ function dependencyDeletionActivity(
 
   for (const deletedTask of deletedTasks) {
     const dependencies = store.tasks.listTaskDependencies(deletedTask.id);
-    for (const edge of dependencies.blockedBy) {
-      if (deletedTaskIds.has(edge.blockerTaskId)) continue;
-      const survivor = store.tasks.getTask(edge.blockerTaskId);
-      if (!survivor) throw new Error(`Task not found: ${edge.blockerTaskId}`);
+    const incidentEdges = [
+      ...dependencies.blockedBy.map((edge) => ({
+        survivorTaskId: edge.blockerTaskId,
+        direction: "Blocks" as const,
+      })),
+      ...dependencies.blocks.map((edge) => ({
+        survivorTaskId: edge.dependentTaskId,
+        direction: "Blocked by" as const,
+      })),
+    ];
+    for (const edge of incidentEdges) {
+      if (deletedTaskIds.has(edge.survivorTaskId)) continue;
+      const survivor = store.tasks.getTask(edge.survivorTaskId);
+      if (!survivor) throw new Error(`Task not found: ${edge.survivorTaskId}`);
       activity.push({
         survivor,
-        body: `Blocks ${deletedTask.key} removed because ${deletedTask.key} was deleted`,
-      });
-    }
-    for (const edge of dependencies.blocks) {
-      if (deletedTaskIds.has(edge.dependentTaskId)) continue;
-      const survivor = store.tasks.getTask(edge.dependentTaskId);
-      if (!survivor) throw new Error(`Task not found: ${edge.dependentTaskId}`);
-      activity.push({
-        survivor,
-        body: `Blocked by ${deletedTask.key} removed because ${deletedTask.key} was deleted`,
+        body: `${edge.direction} ${deletedTask.key} removed because ${deletedTask.key} was deleted`,
       });
     }
   }
@@ -871,9 +872,9 @@ export function registerHandlers(
           };
         });
         if (result.deleted) {
-          await removeAttachmentBlobs(bb, store.tasks, attachments);
           publishDependencyChanges(bb, result.survivors);
           publishProjectsChanged(bb, input.projectId);
+          await removeAttachmentBlobs(bb, store.tasks, attachments);
         }
         return { ok: true, deleted: result.deleted };
       } catch (error) {
@@ -994,9 +995,9 @@ export function registerHandlers(
         if (!deleted) throw new Error(`Task not found: ${input.taskId}`);
         return { deleted, survivors: activity.map((event) => event.survivor) };
       });
-      await removeAttachmentBlobs(bb, store.tasks, attachments);
       publishTasksChanged(bb, task.id, task.projectId);
       publishDependencyChanges(bb, result.survivors);
+      await removeAttachmentBlobs(bb, store.tasks, attachments);
       return { deleted: result.deleted };
     },
     listTaskDependencies(input) {

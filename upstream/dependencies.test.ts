@@ -306,64 +306,118 @@ describe("dependency cleanup during deletion", () => {
     db.close();
   });
 
-  it("rolls survivor activity and edges back when task deletion fails", async () => {
+  it("publishes task and survivor invalidations when blob cleanup fails after commit", async () => {
     const db = database();
     const fake = fakeBb(db);
     const store = createStore(fake.bb);
     const { dependent, blocker } = projectAndTasks(store.tasks);
     const handlers = registerHandlers(fake.bb, store);
     store.tasks.addTaskDependencies(dependent.id, [blocker.id]);
-    db.exec(`
-      CREATE TRIGGER reject_dependency_task_delete
-      BEFORE DELETE ON tasks
-      WHEN OLD.id = '${dependent.id}'
-      BEGIN
-        SELECT RAISE(ABORT, 'injected deletion failure');
-      END;
-    `);
+    store.tasks.createAttachment({
+      taskId: dependent.id,
+      fileName: "task.txt",
+      mime: "text/plain",
+      sizeBytes: 1,
+      blobPath: "blobs/task/task.txt",
+      isImage: false,
+    });
 
     await expect(handlers.deleteTask({ taskId: dependent.id })).rejects.toThrow(
-      "injected deletion failure",
+      "registerAttachments",
     );
 
-    expect(store.tasks.getTask(dependent.id)).toBeDefined();
-    expect(
-      store.tasks.listTaskDependencies(dependent.id).blockedBy,
-    ).toHaveLength(1);
-    expect(store.tasks.listComments(blocker.id)).toEqual([]);
-    expect(fake.realtimeSignals).toEqual([]);
+    expect(store.tasks.getTask(dependent.id)).toBeUndefined();
+    expect(store.tasks.listTaskDependencies(blocker.id).blocks).toEqual([]);
+    expect(store.tasks.listComments(blocker.id)).toHaveLength(1);
+    expect(fake.realtimeSignals).toEqual([
+      {
+        channel: "tasks:changed",
+        payload: { taskId: dependent.id, projectId: dependent.projectId },
+      },
+      {
+        channel: "tasks:changed",
+        payload: { taskId: blocker.id, projectId: blocker.projectId },
+      },
+      { channel: "comments:changed", payload: { taskId: blocker.id } },
+    ]);
     db.close();
   });
 
-  it("rolls cross-project activity and edges back when project deletion fails", async () => {
+  it("publishes project and survivor invalidations when blob cleanup fails after commit", async () => {
     const db = database();
     const fake = fakeBb(db);
     const store = createStore(fake.bb);
     const { firstProject, dependent, blocker } = projectAndTasks(store.tasks);
     const handlers = registerHandlers(fake.bb, store);
     store.tasks.addTaskDependencies(dependent.id, [blocker.id]);
-    db.exec(`
-      CREATE TRIGGER reject_dependency_project_delete
-      BEFORE DELETE ON projects
-      WHEN OLD.id = '${firstProject.id}'
-      BEGIN
-        SELECT RAISE(ABORT, 'injected project deletion failure');
-      END;
-    `);
+    store.tasks.createAttachment({
+      taskId: dependent.id,
+      fileName: "project.txt",
+      mime: "text/plain",
+      sizeBytes: 1,
+      blobPath: "blobs/project/project.txt",
+      isImage: false,
+    });
 
     await expect(
       handlers.deleteProject({ projectId: firstProject.id, force: true }),
-    ).rejects.toThrow("injected project deletion failure");
+    ).rejects.toThrow("registerAttachments");
 
-    expect(store.tasks.getProject(firstProject.id)).toBeDefined();
-    expect(store.tasks.getTask(dependent.id)).toBeDefined();
-    expect(
-      store.tasks.listTaskDependencies(dependent.id).blockedBy,
-    ).toHaveLength(1);
-    expect(store.tasks.listComments(blocker.id)).toEqual([]);
-    expect(fake.realtimeSignals).toEqual([]);
+    expect(store.tasks.getProject(firstProject.id)).toBeUndefined();
+    expect(store.tasks.listTaskDependencies(blocker.id).blocks).toEqual([]);
+    expect(store.tasks.listComments(blocker.id)).toHaveLength(1);
+    expect(fake.realtimeSignals).toEqual([
+      {
+        channel: "tasks:changed",
+        payload: { taskId: blocker.id, projectId: blocker.projectId },
+      },
+      { channel: "comments:changed", payload: { taskId: blocker.id } },
+      {
+        channel: "projects:changed",
+        payload: { projectId: firstProject.id },
+      },
+    ]);
     db.close();
   });
+
+  it.each(["task", "project"] as const)(
+    "rolls survivor activity and edges back when %s deletion fails",
+    async (deletionKind) => {
+      const db = database();
+      const fake = fakeBb(db);
+      const store = createStore(fake.bb);
+      const { firstProject, dependent, blocker } = projectAndTasks(store.tasks);
+      const handlers = registerHandlers(fake.bb, store);
+      store.tasks.addTaskDependencies(dependent.id, [blocker.id]);
+      const table = deletionKind === "task" ? "tasks" : "projects";
+      const id = deletionKind === "task" ? dependent.id : firstProject.id;
+      db.exec(`
+        CREATE TRIGGER reject_dependency_${deletionKind}_delete
+        BEFORE DELETE ON ${table}
+        WHEN OLD.id = '${id}'
+        BEGIN
+          SELECT RAISE(ABORT, 'injected ${deletionKind} deletion failure');
+        END;
+      `);
+
+      const deletion =
+        deletionKind === "task"
+          ? handlers.deleteTask({ taskId: dependent.id })
+          : handlers.deleteProject({ projectId: firstProject.id, force: true });
+      await expect(deletion).rejects.toThrow(
+        `injected ${deletionKind} deletion failure`,
+      );
+
+      expect(store.tasks.getProject(firstProject.id)).toBeDefined();
+      expect(store.tasks.getTask(dependent.id)).toBeDefined();
+      expect(
+        store.tasks.listTaskDependencies(dependent.id).blockedBy,
+      ).toHaveLength(1);
+      expect(store.tasks.listComments(blocker.id)).toEqual([]);
+      expect(fake.realtimeSignals).toEqual([]);
+      db.close();
+    },
+  );
 });
 
 describe("task dependency CLI", () => {
