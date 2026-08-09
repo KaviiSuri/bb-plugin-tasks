@@ -227,6 +227,14 @@ export interface ListTasksPage {
   nextCursor: string | null;
 }
 
+export interface SearchBlockerCandidatesInput {
+  projectId: string;
+  query?: string;
+  dependentTaskId?: string | null;
+  excludeTaskIds?: readonly string[];
+  limit?: number;
+}
+
 export interface UpdateTaskPositionInput {
   status: TaskStatus;
   /** The task immediately before this task in the destination column. */

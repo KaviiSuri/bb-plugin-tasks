@@ -517,6 +517,8 @@ export const tasksRpcContract = defineRpcContract({
         dueDate: dueDateSchema.nullable().default(null),
         parentTaskId: idSchema.nullable().default(null),
         labelIds: taskLabelsSchema.default([]),
+        blockerTaskIds: taskLabelsSchema.default([]),
+        authorName: nonBlankStringSchema.default("You"),
       })
       .strict(),
     output: taskMutationResultSchema,
@@ -541,6 +543,18 @@ export const tasksRpcContract = defineRpcContract({
   deleteTask: {
     input: z.object({ taskId: idSchema }).strict(),
     output: z.object({ deleted: z.boolean() }).strict(),
+  },
+  searchBlockerCandidates: {
+    input: z
+      .object({
+        projectId: idSchema,
+        query: z.string().default(""),
+        dependentTaskId: idSchema.nullable().default(null),
+        excludeTaskIds: taskLabelsSchema.default([]),
+        limit: z.number().int().min(1).max(100).default(50),
+      })
+      .strict(),
+    output: z.object({ candidates: z.array(dependencyTaskSchema) }).strict(),
   },
   listTaskDependencies: {
     input: z.object({ taskId: idSchema }).strict(),

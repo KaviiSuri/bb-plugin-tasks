@@ -26,6 +26,7 @@ import type {
   Preset,
   PresetEnvironmentKind,
   Project,
+  SearchBlockerCandidatesInput,
   SubtaskDoneCounts,
   Task,
   TaskDependency,
@@ -975,6 +976,77 @@ export function createTasksStore(db: PluginDatabase) {
     blockerTaskIds: readonly string[],
   ): TaskDependency[] {
     return removeTaskDependenciesTransaction(dependentTaskId, blockerTaskIds);
+  }
+
+  /**
+   * Search blocker options by key/title. Terminal tasks stay selectable but
+   * sort after every active task; within each status band the selected project
+   * sorts first. When an existing dependent is supplied, options that are
+   * self-links, duplicates, or would close a direct/transitive cycle are
+   * removed before the result limit is applied.
+   */
+  function searchBlockerCandidates(
+    input: SearchBlockerCandidatesInput,
+  ): Task[] {
+    requireProject(input.projectId);
+    const dependentTaskId = input.dependentTaskId ?? null;
+    const invalidTaskIds = new Set(input.excludeTaskIds ?? []);
+
+    if (dependentTaskId !== null) {
+      requireTask(dependentTaskId);
+      invalidTaskIds.add(dependentTaskId);
+      for (const edge of listTaskDependencies(dependentTaskId).blockedBy) {
+        invalidTaskIds.add(edge.blockerTaskId);
+      }
+
+      // A prospective blocker is invalid when it already depends directly or
+      // transitively on the dependent. Traverse the reciprocal (blocks)
+      // direction once so all cycle-producing candidates are excluded.
+      const downstream = db
+        .prepare<[string], { task_id: string }>(
+          `WITH RECURSIVE downstream(task_id) AS (
+             SELECT ?
+             UNION
+             SELECT td.dependent_task_id
+             FROM task_dependencies td
+             JOIN downstream d ON td.blocker_task_id = d.task_id
+           )
+           SELECT task_id FROM downstream`,
+        )
+        .all(dependentTaskId);
+      for (const row of downstream) invalidTaskIds.add(row.task_id);
+    }
+
+    const query = input.query?.trim().toLocaleLowerCase() ?? "";
+    const limit = input.limit ?? 50;
+    const projects = new Map(
+      listProjects().map((project) => [project.id, project] as const),
+    );
+    const terminal = (task: Task) =>
+      task.status === "done" || task.status === "canceled";
+
+    return listTasks()
+      .filter((task) => !invalidTaskIds.has(task.id))
+      .filter(
+        (task) =>
+          query === "" ||
+          task.key.toLocaleLowerCase().includes(query) ||
+          task.title.toLocaleLowerCase().includes(query),
+      )
+      .sort((left, right) => {
+        const terminalOrder = Number(terminal(left)) - Number(terminal(right));
+        if (terminalOrder !== 0) return terminalOrder;
+        const projectOrder =
+          Number(left.projectId !== input.projectId) -
+          Number(right.projectId !== input.projectId);
+        if (projectOrder !== 0) return projectOrder;
+        const leftProject = projects.get(left.projectId)?.name ?? "";
+        const rightProject = projects.get(right.projectId)?.name ?? "";
+        const projectNameOrder = leftProject.localeCompare(rightProject);
+        if (projectNameOrder !== 0) return projectNameOrder;
+        return left.key.localeCompare(right.key, undefined, { numeric: true });
+      })
+      .slice(0, limit);
   }
 
   function validateTaskParent(
@@ -2087,6 +2159,7 @@ export function createTasksStore(db: PluginDatabase) {
     listTaskDependencyCandidateIds,
     addTaskDependencies,
     removeTaskDependencies,
+    searchBlockerCandidates,
     createLabel,
     getLabel,
     listLabels,

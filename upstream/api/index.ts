@@ -889,7 +889,7 @@ export function registerHandlers(
       try {
         validateTaskParent(store, input.projectId, input.parentTaskId);
         validateTaskLabels(store, input.projectId, input.labelIds);
-        const task = store.transaction(() => {
+        const result = store.transaction(() => {
           const created = store.tasks.createTask({
             projectId: input.projectId,
             title: input.title,
@@ -900,12 +900,54 @@ export function registerHandlers(
             parentTaskId: input.parentTaskId,
           });
           replaceTaskLabels(store, created.id, input.labelIds);
-          return apiTask(store, created);
+
+          // Resolve and validate every endpoint only after entering the same
+          // write transaction as task/label creation. A blocker deleted or a
+          // graph mutation made after picker search therefore aborts all rows,
+          // including the allocated task number.
+          const blockers = input.blockerTaskIds.map((blockerTaskId) => {
+            const blocker = store.tasks.getTask(blockerTaskId);
+            if (!blocker) {
+              throw new TaskDependencyError(
+                "dependency_endpoint_not_found",
+                `Blocker task not found: ${blockerTaskId}`,
+              );
+            }
+            return blocker;
+          });
+          store.tasks.addTaskDependencies(
+            created.id,
+            blockers.map((blocker) => blocker.id),
+          );
+          for (const blocker of blockers) {
+            writeSystemComments(store, created.id, input.authorName, [
+              `Blocked by ${blocker.key} added by ${input.authorName}`,
+            ]);
+            writeSystemComments(store, blocker.id, input.authorName, [
+              `Blocks ${created.key} added by ${input.authorName}`,
+            ]);
+          }
+          return {
+            task: apiTask(store, created),
+            storedTask: created,
+            blockers,
+          };
         });
-        publishTasksChanged(bb, task.id, task.projectId);
-        return { ok: true, task };
+
+        if (result.blockers.length === 0) {
+          publishTasksChanged(bb, result.task.id, result.task.projectId);
+        } else {
+          publishDependencyChanges(bb, [result.storedTask, ...result.blockers]);
+        }
+        return { ok: true, task: result.task };
       } catch (error) {
         if (error instanceof TasksDomainFailure) return taskFailure(error);
+        if (error instanceof TaskDependencyError) {
+          return {
+            ok: false,
+            error: { code: error.code, message: error.message },
+          };
+        }
         throw error;
       }
     },
@@ -999,6 +1041,19 @@ export function registerHandlers(
       publishDependencyChanges(bb, result.survivors);
       await removeAttachmentBlobs(bb, store.tasks, attachments);
       return { deleted: result.deleted };
+    },
+    searchBlockerCandidates(input) {
+      return {
+        candidates: store.tasks
+          .searchBlockerCandidates({
+            projectId: input.projectId,
+            query: input.query,
+            dependentTaskId: input.dependentTaskId,
+            excludeTaskIds: input.excludeTaskIds,
+            limit: input.limit,
+          })
+          .map((task) => dependencyTask(store, task.id)),
+      };
     },
     listTaskDependencies(input) {
       const dependencies = store.tasks.listTaskDependencies(input.taskId);

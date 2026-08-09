@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   TASK_PRIORITIES,
   TASK_STATUSES,
+  type DependencyTask,
   type Task,
   type TaskPriority,
   type TaskStatus,
@@ -47,6 +48,10 @@ import { Button } from "@bb/shared-ui/button";
 import { Icon } from "@bb/shared-ui/icon";
 import { cn } from "@bb/shared-ui/lib/utils";
 import { CheckboxField, DEFAULT_COLOR } from "./shared.js";
+import {
+  groupBlockerCandidates,
+  isTerminalStatus,
+} from "./blocker-picker-model.js";
 
 export const STATUS_LABELS: Record<TaskStatus, string> = {
   backlog: "Backlog",
@@ -105,6 +110,11 @@ export function NewTaskDialog({
     defaultParentTaskId ?? null,
   );
   const [parentPickerOpen, setParentPickerOpen] = useState(false);
+  const [blockerPickerOpen, setBlockerPickerOpen] = useState(false);
+  const [selectedBlockers, setSelectedBlockers] = useState<DependencyTask[]>(
+    [],
+  );
+  const [blockerQuery, setBlockerQuery] = useState("");
   const [createMore, setCreateMore] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -128,6 +138,9 @@ export function NewTaskDialog({
     setLabelIds([]);
     setDueDate("");
     setParentTaskId(defaultParentTaskId ?? null);
+    setBlockerPickerOpen(false);
+    setSelectedBlockers([]);
+    setBlockerQuery("");
     setLabelQuery("");
     setPendingFiles([]);
     setCreatedTask(null);
@@ -149,6 +162,24 @@ export function NewTaskDialog({
         : [],
     ["projects:changed"],
     [effectiveProjectId],
+  );
+  const blockerTaskIds = useMemo(
+    () => selectedBlockers.map((candidate) => candidate.task.id),
+    [selectedBlockers],
+  );
+  const blockerCandidates = useTasksQuery(
+    async (rpc) =>
+      effectiveProjectId && blockerPickerOpen
+        ? (
+            await rpc.call("searchBlockerCandidates", {
+              projectId: effectiveProjectId,
+              query: blockerQuery,
+              excludeTaskIds: blockerTaskIds,
+            })
+          ).candidates
+        : [],
+    ["tasks:changed"],
+    [effectiveProjectId, blockerPickerOpen, blockerQuery, blockerTaskIds],
   );
   const parentCandidates = useTasksQuery(
     async (rpc) =>
@@ -292,6 +323,7 @@ export function NewTaskDialog({
         dueDate: dueDate === "" ? null : dueDate,
         parentTaskId,
         labelIds,
+        blockerTaskIds,
       });
       if (!result.ok) {
         setError(result.error.message);
@@ -334,6 +366,8 @@ export function NewTaskDialog({
         setTitle("");
         setDescription("");
         setLabelIds([]);
+        setSelectedBlockers([]);
+        setBlockerQuery("");
         setDueDate("");
         setPendingFiles([]);
         titleRef.current?.focus();
@@ -358,6 +392,26 @@ export function NewTaskDialog({
   const failedCount = pendingFiles.filter(
     (entry) => entry.status === "failed",
   ).length;
+  const blockerCandidateGroups = useMemo(
+    () =>
+      effectiveProjectId === null
+        ? []
+        : groupBlockerCandidates(
+            (blockerCandidates.isLoading
+              ? []
+              : (blockerCandidates.data ?? [])
+            ).filter(
+              (candidate) => !blockerTaskIds.includes(candidate.task.id),
+            ),
+            effectiveProjectId,
+          ),
+    [
+      blockerCandidates.data,
+      blockerCandidates.isLoading,
+      blockerTaskIds,
+      effectiveProjectId,
+    ],
+  );
 
   return (
     <Dialog open={open} onOpenChange={requestClose}>
@@ -605,6 +659,117 @@ export function NewTaskDialog({
                       </CommandItem>
                     ))}
                   </CommandGroup>
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
+          <Popover open={blockerPickerOpen} onOpenChange={setBlockerPickerOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                aria-label="Blocked by"
+                className={cn(CHIP_TRIGGER, "border-input font-normal")}
+              >
+                <Icon name="CornerDownRight" className="size-3" />
+                {selectedBlockers.length === 0
+                  ? "Blocked by"
+                  : selectedBlockers.length === 1
+                    ? `Blocked by · ${selectedBlockers[0]!.task.key}`
+                    : `Blocked by · ${selectedBlockers.length}`}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              className="w-[min(30rem,var(--radix-popover-content-available-width))] p-0"
+              align="start"
+              mobileTitle="Blocked by"
+            >
+              {selectedBlockers.length > 0 ? (
+                <div className="border-b border-border-hairline p-2">
+                  <p className="mb-1 px-1 text-2xs font-medium text-muted-foreground">
+                    Selected blockers
+                  </p>
+                  <div className="flex flex-wrap gap-1">
+                    {selectedBlockers.map((candidate) => (
+                      <button
+                        key={candidate.task.id}
+                        type="button"
+                        aria-label={`Remove blocker ${candidate.task.key}`}
+                        className="flex max-w-full items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs hover:bg-state-hover"
+                        onClick={() =>
+                          setSelectedBlockers((current) =>
+                            current.filter(
+                              (entry) => entry.task.id !== candidate.task.id,
+                            ),
+                          )
+                        }
+                      >
+                        <span className="font-medium">
+                          {candidate.task.key}
+                        </span>
+                        <span className="max-w-40 truncate text-muted-foreground">
+                          {candidate.task.title}
+                        </span>
+                        {isTerminalStatus(candidate.task.status) ? (
+                          <span className="rounded bg-background px-1 text-2xs text-muted-foreground">
+                            {STATUS_LABELS[candidate.task.status]}
+                          </span>
+                        ) : null}
+                        <Icon name="X" className="size-3" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              <Command shouldFilter={false}>
+                <CommandInput
+                  placeholder="Search task keys and titles…"
+                  value={blockerQuery}
+                  onValueChange={setBlockerQuery}
+                />
+                <CommandList>
+                  <CommandEmpty>
+                    {blockerCandidates.isLoading
+                      ? "Searching tasks…"
+                      : (blockerCandidates.error ?? "No valid blockers found.")}
+                  </CommandEmpty>
+                  {blockerCandidateGroups.map((group) => (
+                    <CommandGroup key={group.key} heading={group.label}>
+                      {group.candidates.map((candidate) => (
+                        <CommandItem
+                          key={candidate.task.id}
+                          value={candidate.task.id}
+                          onSelect={() => {
+                            setSelectedBlockers((current) =>
+                              current.some(
+                                (entry) => entry.task.id === candidate.task.id,
+                              )
+                                ? current
+                                : [...current, candidate],
+                            );
+                            setBlockerQuery("");
+                          }}
+                        >
+                          <span
+                            aria-hidden
+                            className="size-2.5 shrink-0 rounded-sm"
+                            style={{ backgroundColor: candidate.project.color }}
+                          />
+                          <span className="shrink-0 font-medium text-muted-foreground">
+                            {candidate.task.key}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate">
+                            {candidate.task.title}
+                          </span>
+                          {isTerminalStatus(candidate.task.status) ? (
+                            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-2xs text-muted-foreground">
+                              {STATUS_LABELS[candidate.task.status]}
+                            </span>
+                          ) : null}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  ))}
                 </CommandList>
               </Command>
             </PopoverContent>
