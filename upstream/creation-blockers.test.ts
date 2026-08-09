@@ -90,7 +90,7 @@ describe("creation blocker contract and picker", () => {
       projectId: "01HZZZZZZZZZZZZZZZZZZZZZP1",
       query: "",
       dependentTaskId: null,
-      excludeTaskIds: [],
+      selectedTaskIds: [],
       limit: 50,
     });
   });
@@ -108,7 +108,7 @@ describe("creation blocker contract and picker", () => {
     const all = store.searchBlockerCandidates({
       projectId: data.currentProject.id,
     });
-    expect(all.map((task) => task.id)).toEqual([
+    expect(all.candidates.map((task) => task.id)).toEqual([
       data.currentActive.id,
       descriptionOnly.id,
       data.otherActive.id,
@@ -121,13 +121,36 @@ describe("creation blocker contract and picker", () => {
           projectId: data.currentProject.id,
           query: "OTH-1",
         })
-        .map((task) => task.id),
+        .candidates.map((task) => task.id),
     ).toEqual([data.otherActive.id]);
     expect(
       store.searchBlockerCandidates({
         projectId: data.currentProject.id,
         query: "needle",
-      }),
+      }).candidates,
+    ).toEqual([]);
+    db.close();
+  });
+
+  it("reconciles controlled selections against durable task state", () => {
+    const db = database();
+    const store = createTasksStore(db as any);
+    const data = fixture(store);
+
+    expect(
+      store
+        .searchBlockerCandidates({
+          projectId: data.currentProject.id,
+          selectedTaskIds: [data.otherActive.id],
+        })
+        .selected.map((task) => task.id),
+    ).toEqual([data.otherActive.id]);
+    store.deleteTask(data.otherActive.id);
+    expect(
+      store.searchBlockerCandidates({
+        projectId: data.currentProject.id,
+        selectedTaskIds: [data.otherActive.id],
+      }).selected,
     ).toEqual([]);
     db.close();
   });
@@ -152,15 +175,18 @@ describe("creation blocker contract and picker", () => {
     store.addTaskDependencies(downstream.id, [dependent.id]);
     store.addTaskDependencies(transitiveDownstream.id, [downstream.id]);
 
-    const candidates = store.searchBlockerCandidates({
+    const result = store.searchBlockerCandidates({
       projectId: data.currentProject.id,
       dependentTaskId: dependent.id,
-      excludeTaskIds: [data.otherActive.id],
+      selectedTaskIds: [data.otherActive.id],
     });
-    const ids = candidates.map((task) => task.id);
+    const ids = result.candidates.map((task) => task.id);
     expect(ids).not.toContain(dependent.id);
     expect(ids).not.toContain(data.currentActive.id);
     expect(ids).not.toContain(data.otherActive.id);
+    expect(result.selected.map((task) => task.id)).toEqual([
+      data.otherActive.id,
+    ]);
     expect(ids).not.toContain(downstream.id);
     expect(ids).not.toContain(transitiveDownstream.id);
     expect(ids).toContain(data.currentDone.id);

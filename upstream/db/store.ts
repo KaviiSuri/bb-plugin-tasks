@@ -9,6 +9,7 @@ import {
   type TaskSort,
 } from "../shared/pagination.js";
 import { presetPermissionModeSchema } from "../shared/contract.js";
+import { compareBlockerCandidateFacts } from "../shared/blocker-candidates.js";
 import type {
   Attachment,
   Comment,
@@ -985,12 +986,13 @@ export function createTasksStore(db: PluginDatabase) {
    * self-links, duplicates, or would close a direct/transitive cycle are
    * removed before the result limit is applied.
    */
-  function searchBlockerCandidates(
-    input: SearchBlockerCandidatesInput,
-  ): Task[] {
+  function searchBlockerCandidates(input: SearchBlockerCandidatesInput): {
+    candidates: Task[];
+    selected: Task[];
+  } {
     requireProject(input.projectId);
     const dependentTaskId = input.dependentTaskId ?? null;
-    const invalidTaskIds = new Set(input.excludeTaskIds ?? []);
+    const invalidTaskIds = new Set<string>();
 
     if (dependentTaskId !== null) {
       requireTask(dependentTaskId);
@@ -1017,36 +1019,45 @@ export function createTasksStore(db: PluginDatabase) {
       for (const row of downstream) invalidTaskIds.add(row.task_id);
     }
 
+    // Re-resolve controlled selection IDs from durable state. Missing or newly
+    // invalid tasks are omitted so clients can reconcile stale selections.
+    const selected = (input.selectedTaskIds ?? []).flatMap((taskId) => {
+      const task = getTask(taskId);
+      return task && !invalidTaskIds.has(task.id) ? [task] : [];
+    });
+    const excludedTaskIds = new Set([
+      ...invalidTaskIds,
+      ...selected.map((task) => task.id),
+    ]);
     const query = input.query?.trim().toLocaleLowerCase() ?? "";
     const limit = input.limit ?? 50;
     const projects = new Map(
       listProjects().map((project) => [project.id, project] as const),
     );
-    const terminal = (task: Task) =>
-      task.status === "done" || task.status === "canceled";
+    const facts = (task: Task) => ({
+      status: task.status,
+      projectId: task.projectId,
+      projectName: projects.get(task.projectId)?.name ?? "",
+      key: task.key,
+    });
 
-    return listTasks()
-      .filter((task) => !invalidTaskIds.has(task.id))
+    const candidates = listTasks()
+      .filter((task) => !excludedTaskIds.has(task.id))
       .filter(
         (task) =>
           query === "" ||
           task.key.toLocaleLowerCase().includes(query) ||
           task.title.toLocaleLowerCase().includes(query),
       )
-      .sort((left, right) => {
-        const terminalOrder = Number(terminal(left)) - Number(terminal(right));
-        if (terminalOrder !== 0) return terminalOrder;
-        const projectOrder =
-          Number(left.projectId !== input.projectId) -
-          Number(right.projectId !== input.projectId);
-        if (projectOrder !== 0) return projectOrder;
-        const leftProject = projects.get(left.projectId)?.name ?? "";
-        const rightProject = projects.get(right.projectId)?.name ?? "";
-        const projectNameOrder = leftProject.localeCompare(rightProject);
-        if (projectNameOrder !== 0) return projectNameOrder;
-        return left.key.localeCompare(right.key, undefined, { numeric: true });
-      })
+      .sort((left, right) =>
+        compareBlockerCandidateFacts(
+          facts(left),
+          facts(right),
+          input.projectId,
+        ),
+      )
       .slice(0, limit);
+    return { candidates, selected };
   }
 
   function validateTaskParent(

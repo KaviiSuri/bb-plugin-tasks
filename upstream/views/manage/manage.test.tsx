@@ -131,7 +131,7 @@ describe("NewTaskDialog", () => {
     );
   });
 
-  it("selects cross-project and terminal blockers without offering Blocks", async () => {
+  it("selects cross-project/terminal blockers and prunes stale selection before create", async () => {
     const createCalls: Array<Record<string, unknown>> = [];
     const searchCalls: Array<Record<string, unknown>> = [];
     const otherProject = {
@@ -159,10 +159,27 @@ describe("NewTaskDialog", () => {
       project: candidateProject,
     });
     const candidates = [
-      candidate("01HZZZZZZZZZZZZZZZZZZZZZB1", "TSK-6", "Current active", project),
-      candidate("01HZZZZZZZZZZZZZZZZZZZZZB2", "PLAT-1", "Cross-project blocker", otherProject),
-      candidate("01HZZZZZZZZZZZZZZZZZZZZZB3", "TSK-7", "Resolved blocker", project, "done"),
+      candidate(
+        "01HZZZZZZZZZZZZZZZZZZZZZB1",
+        "TSK-6",
+        "Current active",
+        project,
+      ),
+      candidate(
+        "01HZZZZZZZZZZZZZZZZZZZZZB2",
+        "PLAT-1",
+        "Cross-project blocker",
+        otherProject,
+      ),
+      candidate(
+        "01HZZZZZZZZZZZZZZZZZZZZZB3",
+        "TSK-7",
+        "Resolved blocker",
+        project,
+        "done",
+      ),
     ];
+    const durableIds = new Set(candidates.map((entry) => entry.task.id));
     const slot = renderSlot(
       app.navPanels[0]!,
       { subPath: PROJECT_ID },
@@ -176,13 +193,20 @@ describe("NewTaskDialog", () => {
           listLabels: () => ({ labels: [] }),
           searchBlockerCandidates: (input: Record<string, unknown>) => {
             searchCalls.push(input);
-            const excluded = new Set((input.excludeTaskIds as string[]) ?? []);
+            const selected = new Set((input.selectedTaskIds as string[]) ?? []);
             const query = String(input.query ?? "").toLowerCase();
             return {
               candidates: candidates.filter(
                 (entry) =>
-                  !excluded.has(entry.task.id) &&
-                  `${entry.task.key} ${entry.task.title}`.toLowerCase().includes(query),
+                  durableIds.has(entry.task.id) &&
+                  !selected.has(entry.task.id) &&
+                  `${entry.task.key} ${entry.task.title}`
+                    .toLowerCase()
+                    .includes(query),
+              ),
+              selected: candidates.filter(
+                (entry) =>
+                  durableIds.has(entry.task.id) && selected.has(entry.task.id),
               ),
             };
           },
@@ -209,19 +233,20 @@ describe("NewTaskDialog", () => {
     fireEvent.click(await slot.findByText("Cross-project blocker"));
     await waitFor(() =>
       expect(searchCalls.at(-1)).toMatchObject({
-        excludeTaskIds: ["01HZZZZZZZZZZZZZZZZZZZZZB2"],
+        selectedTaskIds: ["01HZZZZZZZZZZZZZZZZZZZZZB2"],
       }),
     );
     fireEvent.click(await slot.findByText("Resolved blocker"));
     expect(slot.getAllByText("Done").length).toBeGreaterThan(0);
 
+    // Simulate deletion after selection without a realtime refresh. Submit's
+    // immediate reconciliation must drop it while the create transaction keeps
+    // its own validation for the remaining race window.
+    durableIds.delete("01HZZZZZZZZZZZZZZZZZZZZZB2");
     fireEvent.click(slot.getByRole("button", { name: "Create task" }));
     await waitFor(() => expect(createCalls).toHaveLength(1));
     expect(createCalls[0]).toMatchObject({
-      blockerTaskIds: [
-        "01HZZZZZZZZZZZZZZZZZZZZZB2",
-        "01HZZZZZZZZZZZZZZZZZZZZZB3",
-      ],
+      blockerTaskIds: ["01HZZZZZZZZZZZZZZZZZZZZZB3"],
     });
   });
 

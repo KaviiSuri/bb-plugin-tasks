@@ -314,6 +314,38 @@ function mutateTaskDependencies(
     }
     throw error;
   }
+/** Resolve, add, and record reciprocal activity as one caller-owned write.
+ * Callers must invoke this inside store.transaction so task creation and the
+ * regular dependency API share exactly the same mutation semantics. */
+function addTaskDependenciesWithActivity(
+  store: TasksApiStore,
+  dependent: StoredTask,
+  blockerTaskIds: readonly string[],
+  authorName: string,
+) {
+  const blockers = blockerTaskIds.map((taskId) => {
+    const blocker = store.tasks.getTask(taskId);
+    if (!blocker) {
+      throw new TaskDependencyError(
+        "dependency_endpoint_not_found",
+        `Blocker task not found: ${taskId}`,
+      );
+    }
+    return blocker;
+  });
+  const dependencies = store.tasks.addTaskDependencies(
+    dependent.id,
+    blockers.map((blocker) => blocker.id),
+  );
+  for (const blocker of blockers) {
+    writeSystemComments(store, dependent.id, authorName, [
+      `Blocked by ${blocker.key} added by ${authorName}`,
+    ]);
+    writeSystemComments(store, blocker.id, authorName, [
+      `Blocks ${dependent.key} added by ${authorName}`,
+    ]);
+  }
+  return { blockers, dependencies };
 }
 
 interface DependencyDeletionActivity {
@@ -905,28 +937,12 @@ export function registerHandlers(
           // write transaction as task/label creation. A blocker deleted or a
           // graph mutation made after picker search therefore aborts all rows,
           // including the allocated task number.
-          const blockers = input.blockerTaskIds.map((blockerTaskId) => {
-            const blocker = store.tasks.getTask(blockerTaskId);
-            if (!blocker) {
-              throw new TaskDependencyError(
-                "dependency_endpoint_not_found",
-                `Blocker task not found: ${blockerTaskId}`,
-              );
-            }
-            return blocker;
-          });
-          store.tasks.addTaskDependencies(
-            created.id,
-            blockers.map((blocker) => blocker.id),
+          const { blockers } = addTaskDependenciesWithActivity(
+            store,
+            created,
+            input.blockerTaskIds,
+            input.authorName,
           );
-          for (const blocker of blockers) {
-            writeSystemComments(store, created.id, input.authorName, [
-              `Blocked by ${blocker.key} added by ${input.authorName}`,
-            ]);
-            writeSystemComments(store, blocker.id, input.authorName, [
-              `Blocks ${created.key} added by ${input.authorName}`,
-            ]);
-          }
           return {
             task: apiTask(store, created),
             storedTask: created,
@@ -1043,16 +1059,18 @@ export function registerHandlers(
       return { deleted: result.deleted };
     },
     searchBlockerCandidates(input) {
+      const result = store.tasks.searchBlockerCandidates({
+        projectId: input.projectId,
+        query: input.query,
+        dependentTaskId: input.dependentTaskId,
+        selectedTaskIds: input.selectedTaskIds,
+        limit: input.limit,
+      });
       return {
-        candidates: store.tasks
-          .searchBlockerCandidates({
-            projectId: input.projectId,
-            query: input.query,
-            dependentTaskId: input.dependentTaskId,
-            excludeTaskIds: input.excludeTaskIds,
-            limit: input.limit,
-          })
-          .map((task) => dependencyTask(store, task.id)),
+        candidates: result.candidates.map((task) =>
+          dependencyTask(store, task.id),
+        ),
+        selected: result.selected.map((task) => dependencyTask(store, task.id)),
       };
     },
     listTaskDependencies(input) {
@@ -1080,7 +1098,36 @@ export function registerHandlers(
       };
     },
     addTaskDependencies(input) {
-      return mutateTaskDependencies(bb, store, "add", input);
+      try {
+        const result = store.transaction(() => {
+          const dependent = store.tasks.getTask(input.dependentTaskId);
+          if (!dependent) {
+            throw new TaskDependencyError(
+              "dependency_endpoint_not_found",
+              `Dependent task not found: ${input.dependentTaskId}`,
+            );
+          }
+          return {
+            dependent,
+            ...addTaskDependenciesWithActivity(
+              store,
+              dependent,
+              input.blockerTaskIds,
+              input.authorName,
+            ),
+          };
+        });
+        publishDependencyChanges(bb, [result.dependent, ...result.blockers]);
+        return { ok: true, dependencies: result.dependencies };
+      } catch (error) {
+        if (error instanceof TaskDependencyError) {
+          return {
+            ok: false,
+            error: { code: error.code, message: error.message },
+          };
+        }
+        throw error;
+      }
     },
     removeTaskDependencies(input) {
       return mutateTaskDependencies(bb, store, "remove", input);

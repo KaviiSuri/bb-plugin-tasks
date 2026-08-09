@@ -550,11 +550,16 @@ export const tasksRpcContract = defineRpcContract({
         projectId: idSchema,
         query: z.string().default(""),
         dependentTaskId: idSchema.nullable().default(null),
-        excludeTaskIds: taskLabelsSchema.default([]),
+        selectedTaskIds: taskLabelsSchema.default([]),
         limit: z.number().int().min(1).max(100).default(50),
       })
       .strict(),
-    output: z.object({ candidates: z.array(dependencyTaskSchema) }).strict(),
+    output: z
+      .object({
+        candidates: z.array(dependencyTaskSchema),
+        selected: z.array(dependencyTaskSchema),
+      })
+      .strict(),
   },
   listTaskDependencies: {
     input: z.object({ taskId: idSchema }).strict(),

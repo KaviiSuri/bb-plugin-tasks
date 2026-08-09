@@ -1,13 +1,13 @@
-import type { DependencyTask, TaskStatus } from "../../shared/contract.js";
+import type { DependencyTask } from "../../shared/contract.js";
+import {
+  compareBlockerCandidateFacts,
+  isTerminalTaskStatus,
+} from "../../shared/blocker-candidates.js";
 
 export interface BlockerCandidateGroup {
   key: string;
   label: string;
   candidates: DependencyTask[];
-}
-
-export function isTerminalStatus(status: TaskStatus): boolean {
-  return status === "done" || status === "canceled";
 }
 
 /**
@@ -19,27 +19,27 @@ export function groupBlockerCandidates(
   candidates: readonly DependencyTask[],
   currentProjectId: string,
 ): BlockerCandidateGroup[] {
-  const sorted = [...candidates].sort((left, right) => {
-    const terminalOrder =
-      Number(isTerminalStatus(left.task.status)) -
-      Number(isTerminalStatus(right.task.status));
-    if (terminalOrder !== 0) return terminalOrder;
-    const projectOrder =
-      Number(left.project.id !== currentProjectId) -
-      Number(right.project.id !== currentProjectId);
-    if (projectOrder !== 0) return projectOrder;
-    const projectNameOrder = left.project.name.localeCompare(
-      right.project.name,
-    );
-    if (projectNameOrder !== 0) return projectNameOrder;
-    return left.task.key.localeCompare(right.task.key, undefined, {
-      numeric: true,
-    });
-  });
+  const sorted = [...candidates].sort((left, right) =>
+    compareBlockerCandidateFacts(
+      {
+        status: left.task.status,
+        projectId: left.project.id,
+        projectName: left.project.name,
+        key: left.task.key,
+      },
+      {
+        status: right.task.status,
+        projectId: right.project.id,
+        projectName: right.project.name,
+        key: right.task.key,
+      },
+      currentProjectId,
+    ),
+  );
 
   const groups = new Map<string, BlockerCandidateGroup>();
   for (const candidate of sorted) {
-    const terminal = isTerminalStatus(candidate.task.status);
+    const terminal = isTerminalTaskStatus(candidate.task.status);
     const currentProject = candidate.project.id === currentProjectId;
     const key = `${terminal ? "terminal" : "active"}:${candidate.project.id}`;
     const context = currentProject

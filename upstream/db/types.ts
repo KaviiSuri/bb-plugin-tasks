@@ -231,7 +231,7 @@ export interface SearchBlockerCandidatesInput {
   projectId: string;
   query?: string;
   dependentTaskId?: string | null;
-  excludeTaskIds?: readonly string[];
+  selectedTaskIds?: readonly string[];
   limit?: number;
 }
 
