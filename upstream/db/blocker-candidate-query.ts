@@ -66,7 +66,9 @@ function otherProjectsPhase(
       AND p.id <> @currentProjectId
       AND ${terminalPredicate} = ${terminal ? 1 : 0}
       AND ${commonWhere}
-    ORDER BY p.name COLLATE NOCASE, p.id, t.number, t.id
+    -- The forced task index supplies number/id order within each project. The
+    -- bounded outer merge restates the complete order for the returned rows.
+    ORDER BY p.name COLLATE NOCASE, p.id
     LIMIT @candidateLimit
   )`;
 }

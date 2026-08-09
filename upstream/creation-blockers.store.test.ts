@@ -43,6 +43,24 @@ function broadlyScansTasks(plan: readonly QueryPlanRow[]): boolean {
   return plan.some((row) => /^SCAN t(?:\s|$)/.test(row.detail));
 }
 
+function expectIndexedPhasePlan(
+  plan: readonly QueryPlanRow[],
+  phase: string,
+  indexNames: readonly string[],
+): void {
+  const rows = phasePlan(plan, phase);
+  for (const indexName of indexNames) {
+    expect(usesIndex(rows, indexName), `${phase} uses ${indexName}`).toBe(true);
+  }
+  expect(broadlyScansTasks(rows), `${phase} avoids a broad tasks scan`).toBe(
+    false,
+  );
+  expect(
+    rows.some((row) => row.detail.startsWith("USE TEMP B-TREE")),
+    `${phase} avoids an unbounded temporary sort`,
+  ).toBe(false);
+}
+
 function setup() {
   const db = new Database(":memory:");
   return { db, store: createTasksStore(db) };
@@ -198,22 +216,16 @@ describe("creation blocker contract and store search", () => {
         candidateLimit: 2,
       });
     for (const phase of ["current_active", "current_terminal"]) {
-      const rows = phasePlan(plan, phase);
-      expect(usesIndex(rows, "idx_tasks_blocker_project"), phase).toBe(true);
-      expect(broadlyScansTasks(rows), phase).toBe(false);
-      expect(
-        rows.some((row) => row.detail.startsWith("USE TEMP B-TREE")),
-        phase,
-      ).toBe(false);
+      expectIndexedPhasePlan(plan, phase, ["idx_tasks_blocker_project"]);
     }
     for (const phase of ["other_active", "other_terminal"]) {
-      const rows = phasePlan(plan, phase);
-      expect(usesIndex(rows, "idx_projects_blocker_candidates"), phase).toBe(
-        true,
-      );
-      expect(usesIndex(rows, "idx_tasks_blocker_project"), phase).toBe(true);
-      expect(broadlyScansTasks(rows), phase).toBe(false);
+      expectIndexedPhasePlan(plan, phase, [
+        "idx_projects_blocker_candidates",
+        "idx_tasks_blocker_project",
+      ]);
     }
+    // Phase sorts must remain index-backed. The outer merge may still use a
+    // temporary B-tree because it orders at most 4 × candidateLimit rows.
     expect(usesIndex(plan, "idx_task_dependencies_blocker")).toBe(true);
     db.close();
   });
@@ -243,16 +255,26 @@ describe("creation blocker contract and store search", () => {
       projectId: alpha.id,
       title: "Ranked alpha",
     });
+    const alphaSecond = store.createTask({
+      projectId: alpha.id,
+      title: "Ranked alpha second",
+    });
 
-    expect(
+    const search = (limit: number) =>
       store
         .searchBlockerCandidates({
           projectId: data.currentProject.id,
           query: "ranked",
-          limit: 3,
+          limit,
         })
-        .candidates.map((task) => task.id),
-    ).toEqual([current.id, alphaTask.id, zuluTask.id]);
+        .candidates.map((task) => task.id);
+    expect(search(2)).toEqual([current.id, alphaTask.id]);
+    expect(search(4)).toEqual([
+      current.id,
+      alphaTask.id,
+      alphaSecond.id,
+      zuluTask.id,
+    ]);
     db.close();
   });
 
