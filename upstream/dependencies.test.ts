@@ -306,79 +306,75 @@ describe("dependency cleanup during deletion", () => {
     db.close();
   });
 
-  it("publishes task and survivor invalidations when blob cleanup fails after commit", async () => {
-    const db = database();
-    const fake = fakeBb(db);
-    const store = createStore(fake.bb);
-    const { dependent, blocker } = projectAndTasks(store.tasks);
-    const handlers = registerHandlers(fake.bb, store);
-    store.tasks.addTaskDependencies(dependent.id, [blocker.id]);
-    store.tasks.createAttachment({
-      taskId: dependent.id,
-      fileName: "task.txt",
-      mime: "text/plain",
-      sizeBytes: 1,
-      blobPath: "blobs/task/task.txt",
-      isImage: false,
-    });
+  it.each([
+    { deletionKind: "task", fileName: "task.txt" },
+    { deletionKind: "forced-project", fileName: "project.txt" },
+  ] as const)(
+    "publishes $deletionKind and survivor invalidations when blob cleanup fails after commit",
+    async ({ deletionKind, fileName }) => {
+      const db = database();
+      const fake = fakeBb(db);
+      const store = createStore(fake.bb);
+      const { firstProject, dependent, blocker } = projectAndTasks(store.tasks);
+      const handlers = registerHandlers(fake.bb, store);
+      store.tasks.addTaskDependencies(dependent.id, [blocker.id]);
+      store.tasks.createAttachment({
+        taskId: dependent.id,
+        fileName,
+        mime: "text/plain",
+        sizeBytes: 1,
+        blobPath: `blobs/${deletionKind}/${fileName}`,
+        isImage: false,
+      });
 
-    await expect(handlers.deleteTask({ taskId: dependent.id })).rejects.toThrow(
-      "registerAttachments",
-    );
+      const deletion =
+        deletionKind === "task"
+          ? handlers.deleteTask({ taskId: dependent.id })
+          : handlers.deleteProject({
+              projectId: firstProject.id,
+              force: true,
+            });
+      await expect(deletion).rejects.toThrow("registerAttachments");
 
-    expect(store.tasks.getTask(dependent.id)).toBeUndefined();
-    expect(store.tasks.listTaskDependencies(blocker.id).blocks).toEqual([]);
-    expect(store.tasks.listComments(blocker.id)).toHaveLength(1);
-    expect(fake.realtimeSignals).toEqual([
-      {
-        channel: "tasks:changed",
-        payload: { taskId: dependent.id, projectId: dependent.projectId },
-      },
-      {
-        channel: "tasks:changed",
-        payload: { taskId: blocker.id, projectId: blocker.projectId },
-      },
-      { channel: "comments:changed", payload: { taskId: blocker.id } },
-    ]);
-    db.close();
-  });
-
-  it("publishes project and survivor invalidations when blob cleanup fails after commit", async () => {
-    const db = database();
-    const fake = fakeBb(db);
-    const store = createStore(fake.bb);
-    const { firstProject, dependent, blocker } = projectAndTasks(store.tasks);
-    const handlers = registerHandlers(fake.bb, store);
-    store.tasks.addTaskDependencies(dependent.id, [blocker.id]);
-    store.tasks.createAttachment({
-      taskId: dependent.id,
-      fileName: "project.txt",
-      mime: "text/plain",
-      sizeBytes: 1,
-      blobPath: "blobs/project/project.txt",
-      isImage: false,
-    });
-
-    await expect(
-      handlers.deleteProject({ projectId: firstProject.id, force: true }),
-    ).rejects.toThrow("registerAttachments");
-
-    expect(store.tasks.getProject(firstProject.id)).toBeUndefined();
-    expect(store.tasks.listTaskDependencies(blocker.id).blocks).toEqual([]);
-    expect(store.tasks.listComments(blocker.id)).toHaveLength(1);
-    expect(fake.realtimeSignals).toEqual([
-      {
-        channel: "tasks:changed",
-        payload: { taskId: blocker.id, projectId: blocker.projectId },
-      },
-      { channel: "comments:changed", payload: { taskId: blocker.id } },
-      {
-        channel: "projects:changed",
-        payload: { projectId: firstProject.id },
-      },
-    ]);
-    db.close();
-  });
+      expect(store.tasks.getTask(dependent.id)).toBeUndefined();
+      const remainingProject = store.tasks.getProject(firstProject.id);
+      if (deletionKind === "task") {
+        expect(remainingProject).toMatchObject({ id: firstProject.id });
+      } else {
+        expect(remainingProject).toBeUndefined();
+      }
+      expect(store.tasks.listTaskDependencies(blocker.id).blocks).toEqual([]);
+      expect(store.tasks.listComments(blocker.id)).toHaveLength(1);
+      const survivorSignals = [
+        {
+          channel: "tasks:changed",
+          payload: { taskId: blocker.id, projectId: blocker.projectId },
+        },
+        { channel: "comments:changed", payload: { taskId: blocker.id } },
+      ];
+      expect(fake.realtimeSignals).toEqual(
+        deletionKind === "task"
+          ? [
+              {
+                channel: "tasks:changed",
+                payload: {
+                  taskId: dependent.id,
+                  projectId: dependent.projectId,
+                },
+              },
+              ...survivorSignals,
+            ]
+          : [
+              ...survivorSignals,
+              {
+                channel: "projects:changed",
+                payload: { projectId: firstProject.id },
+              },
+            ],
+      );
+      db.close();
+    },
+  );
 
   it.each(["task", "project"] as const)(
     "rolls survivor activity and edges back when %s deletion fails",
