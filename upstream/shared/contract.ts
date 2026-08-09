@@ -326,13 +326,19 @@ const attachmentDeleteResultSchema = z.union([
   z.object({ ok: z.literal(false), error: tasksDomainErrorSchema }).strict(),
 ]);
 
-const taskLabelsSchema = z
+const uniqueIdArraySchema = z
   .array(idSchema)
-  .max(100)
   .refine(
     (ids) => new Set(ids).size === ids.length,
     "must not contain duplicates",
   );
+const MAX_TASK_LABEL_IDS = 100;
+const MAX_BLOCKER_TASK_IDS = 100;
+const taskLabelIdsSchema = uniqueIdArraySchema.max(MAX_TASK_LABEL_IDS);
+const blockerTaskIdsSchema = uniqueIdArraySchema.max(MAX_BLOCKER_TASK_IDS);
+const selectedBlockerTaskIdsSchema =
+  uniqueIdArraySchema.max(MAX_BLOCKER_TASK_IDS);
+const requiredBlockerTaskIdsSchema = blockerTaskIdsSchema.min(1);
 
 const updateTaskInputSchema = z
   .object({
@@ -343,7 +349,7 @@ const updateTaskInputSchema = z
     priority: taskPrioritySchema.optional(),
     dueDate: dueDateSchema.nullable().optional(),
     parentTaskId: idSchema.nullable().optional(),
-    labelIds: taskLabelsSchema.optional(),
+    labelIds: taskLabelIdsSchema.optional(),
     authorName: nonBlankStringSchema.default("You"),
   })
   .strict()
@@ -516,8 +522,8 @@ export const tasksRpcContract = defineRpcContract({
         priority: taskPrioritySchema.default("none"),
         dueDate: dueDateSchema.nullable().default(null),
         parentTaskId: idSchema.nullable().default(null),
-        labelIds: taskLabelsSchema.default([]),
-        blockerTaskIds: taskLabelsSchema.default([]),
+        labelIds: taskLabelIdsSchema.default([]),
+        blockerTaskIds: blockerTaskIdsSchema.default([]),
         authorName: nonBlankStringSchema.default("You"),
       })
       .strict(),
@@ -550,7 +556,7 @@ export const tasksRpcContract = defineRpcContract({
         projectId: idSchema,
         query: z.string().default(""),
         dependentTaskId: idSchema.nullable().default(null),
-        selectedTaskIds: taskLabelsSchema.default([]),
+        selectedTaskIds: selectedBlockerTaskIdsSchema.default([]),
         limit: z.number().int().min(1).max(100).default(50),
       })
       .strict(),
@@ -583,14 +589,7 @@ export const tasksRpcContract = defineRpcContract({
     input: z
       .object({
         dependentTaskId: idSchema,
-        blockerTaskIds: z
-          .array(idSchema)
-          .min(1)
-          .max(100)
-          .refine(
-            (ids) => new Set(ids).size === ids.length,
-            "must not contain duplicates",
-          ),
+        blockerTaskIds: requiredBlockerTaskIdsSchema,
         authorName: nonBlankStringSchema.default("You"),
       })
       .strict(),
@@ -600,14 +599,7 @@ export const tasksRpcContract = defineRpcContract({
     input: z
       .object({
         dependentTaskId: idSchema,
-        blockerTaskIds: z
-          .array(idSchema)
-          .min(1)
-          .max(100)
-          .refine(
-            (ids) => new Set(ids).size === ids.length,
-            "must not contain duplicates",
-          ),
+        blockerTaskIds: requiredBlockerTaskIdsSchema,
         authorName: nonBlankStringSchema.default("You"),
       })
       .strict(),

@@ -95,6 +95,37 @@ describe("creation blocker contract and picker", () => {
     });
   });
 
+  it("keeps label and blocker ID-array contracts independently named but uniquely constrained", () => {
+    const projectId = "01HZZZZZZZZZZZZZZZZZZZZZP1";
+    const taskId = "01HZZZZZZZZZZZZZZZZZZZZZT1";
+    expect(
+      tasksRpcContract.createTask.input.safeParse({
+        projectId,
+        title: "Duplicate labels",
+        labelIds: [taskId, taskId],
+      }).success,
+    ).toBe(false);
+    expect(
+      tasksRpcContract.createTask.input.safeParse({
+        projectId,
+        title: "Duplicate blockers",
+        blockerTaskIds: [taskId, taskId],
+      }).success,
+    ).toBe(false);
+    expect(
+      tasksRpcContract.searchBlockerCandidates.input.safeParse({
+        projectId,
+        selectedTaskIds: [taskId, taskId],
+      }).success,
+    ).toBe(false);
+    expect(
+      tasksRpcContract.addTaskDependencies.input.safeParse({
+        dependentTaskId: taskId,
+        blockerTaskIds: [],
+      }).success,
+    ).toBe(false);
+  });
+
   it("searches keys/titles across projects with project bias and terminal ordering", () => {
     const db = database();
     const store = createTasksStore(db as any);

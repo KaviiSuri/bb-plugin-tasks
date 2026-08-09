@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useMemo,
@@ -82,6 +83,18 @@ export const BlockerPicker = forwardRef<
     [projectId, open, query, selectedTaskIds],
   );
 
+  const reconcileSelection = useCallback(
+    (selected: DependencyTask[]): string[] => {
+      const durableIds = selected.map((candidate) => candidate.task.id);
+      setSelectedItems(selected);
+      if (!sameIds(durableIds, selectedTaskIds)) {
+        onSelectedTaskIdsChange(durableIds);
+      }
+      return durableIds;
+    },
+    [selectedTaskIds, onSelectedTaskIdsChange],
+  );
+
   useEffect(() => {
     if (
       !search.data ||
@@ -89,14 +102,8 @@ export const BlockerPicker = forwardRef<
     ) {
       return;
     }
-    const durableIds = search.data.selected.map(
-      (candidate) => candidate.task.id,
-    );
-    setSelectedItems(search.data.selected);
-    if (!sameIds(durableIds, selectedTaskIds)) {
-      onSelectedTaskIdsChange(durableIds);
-    }
-  }, [search.data, selectedTaskIds, onSelectedTaskIdsChange]);
+    reconcileSelection(search.data.selected);
+  }, [search.data, selectedTaskIds, reconcileSelection]);
 
   useEffect(() => {
     if (selectedTaskIds.length === 0) setSelectedItems([]);
@@ -113,17 +120,10 @@ export const BlockerPicker = forwardRef<
           selectedTaskIds,
           limit: 1,
         });
-        const durableIds = result.selected.map(
-          (candidate) => candidate.task.id,
-        );
-        setSelectedItems(result.selected);
-        if (!sameIds(durableIds, selectedTaskIds)) {
-          onSelectedTaskIdsChange(durableIds);
-        }
-        return durableIds;
+        return reconcileSelection(result.selected);
       },
     }),
-    [projectId, rpc, selectedTaskIds, onSelectedTaskIdsChange],
+    [projectId, rpc, selectedTaskIds, reconcileSelection],
   );
 
   const groups = useMemo(
