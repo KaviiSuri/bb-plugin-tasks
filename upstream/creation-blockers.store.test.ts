@@ -20,9 +20,13 @@ function phasePlan(
   plan: readonly QueryPlanRow[],
   phase: string,
 ): QueryPlanRow[] {
-  const root = plan.find(
-    (row) => row.detail.startsWith("CO-ROUTINE ") && row.detail.endsWith(phase),
-  );
+  const root = plan.find((row) => {
+    const referencedName = row.detail.trim().split(/\s+/).at(-1);
+    const hasPlanChildren = plan.some(
+      (candidate) => candidate.parent === row.id,
+    );
+    return referencedName === phase && hasPlanChildren;
+  });
   expect(root, `query plan phase ${phase}`).toBeDefined();
   const included = new Set([root!.id]);
   let previousSize = -1;
@@ -115,6 +119,22 @@ function asDependencyTask(store: Store, task: ReturnType<Store["createTask"]>) {
 }
 
 describe("creation blocker contract and store search", () => {
+  it("finds a named phase root regardless of its planner operation", () => {
+    const plan: QueryPlanRow[] = [
+      { id: 1, parent: 0, detail: "SCAN other_active" },
+      { id: 2, parent: 0, detail: "MATERIALIZE other_active" },
+      {
+        id: 3,
+        parent: 2,
+        detail: "SEARCH t USING INDEX idx_tasks_blocker_project",
+      },
+    ];
+
+    expect(phasePlan(plan, "other_active").map((row) => row.id)).toEqual([
+      2, 3,
+    ]);
+  });
+
   it("defaults creation blockers and validates candidate-search options", () => {
     expect(
       tasksRpcContract.createTask.input.parse({
