@@ -7,6 +7,9 @@ export default defineConfig({
   // here so both environments resolve setup files and test globs identically.
   root: fileURLToPath(new URL(".", import.meta.url)),
   resolve: {
+    // Prefer workspace TypeScript entrypoints in BB's monorepo while package
+    // shims in this standalone checkout continue to use their default export.
+    conditions: ["source"],
     alias: {
       // tippy.js (via @tiptap/extension-bubble-menu) only ships a CJS main;
       // point vitest at the ESM build so `import tippy` gets the function.
