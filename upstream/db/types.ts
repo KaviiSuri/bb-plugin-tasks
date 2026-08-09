@@ -209,11 +209,20 @@ export interface UpdateTaskInput {
   parentTaskId?: string | null;
 }
 
+export const TASK_BLOCKING_FILTERS = ["all", "blocked", "not_blocked"] as const;
+export type TaskBlockingFilter = (typeof TASK_BLOCKING_FILTERS)[number];
+
+export interface TaskBlockingSummary {
+  isBlocked: boolean;
+  unresolvedBlockerCount: number;
+}
+
 export interface ListTasksFilters {
   projectId?: string;
   statuses?: readonly TaskStatus[];
   priorities?: readonly TaskPriority[];
   labelIds?: readonly string[];
+  blocking?: TaskBlockingFilter;
   activeOnly?: boolean;
   parentTaskId?: string | null;
   search?: string;

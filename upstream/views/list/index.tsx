@@ -154,6 +154,7 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
     statuses: filters.statuses,
     priorities: filters.priorities,
     labelIds,
+    blocking: filters.blocking,
   }, showSubtasks);
   const meta = useTaskListMeta(tasksQuery.data);
   const edits = useListTaskEdits(tasksQuery.data, (message) =>
@@ -191,6 +192,7 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
         filters.statuses,
         filters.priorities,
         labelIds ?? [],
+        filters.blocking,
       ),
     );
   }, [
@@ -198,6 +200,7 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
     edits.entries,
     filters.statuses,
     filters.priorities,
+    filters.blocking,
     labelIds,
   ]);
   const groups = useMemo(

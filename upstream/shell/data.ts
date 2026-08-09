@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRealtime, useRpc } from "@bb/plugin-sdk/app";
 import type { TasksRpcContract } from "../shared/contract.js";
-import type { Task, TaskPriority, TaskStatus } from "../shared/contract.js";
+import type {
+  Task,
+  TaskBlockingFilter,
+  TaskPriority,
+  TaskStatus,
+} from "../shared/contract.js";
 import { TASKS_PAGE_MAX_LIMIT, type TaskSort } from "../shared/pagination.js";
 import type { MentionItem } from "../editor/extensions.js";
 import { useTasksRefresh } from "./refresh.js";
@@ -18,6 +23,7 @@ export interface TaskListQuery {
   statuses?: TaskStatus[];
   priorities?: TaskPriority[];
   labelIds?: string[];
+  blocking?: TaskBlockingFilter;
   activeOnly?: boolean;
   parentTaskId?: string | null;
   search?: string;

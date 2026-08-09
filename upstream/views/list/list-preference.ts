@@ -1,6 +1,8 @@
 import {
+  TASK_BLOCKING_FILTERS,
   TASK_PRIORITIES,
   TASK_STATUSES,
+  type TaskBlockingFilter,
   type TaskPriority,
   type TaskStatus,
 } from "../../shared/contract.js";
@@ -55,6 +57,7 @@ export function listPreferenceScope(
 
 const STATUS_SET = new Set<string>(TASK_STATUSES);
 const PRIORITY_SET = new Set<string>(TASK_PRIORITIES);
+const BLOCKING_SET = new Set<string>(TASK_BLOCKING_FILTERS);
 const SORT_SET = new Set<string>(TASK_SORTS);
 
 function uniqueValidStatuses(values: unknown): TaskStatus[] {
@@ -105,6 +108,12 @@ function uniqueLabelNames(values: unknown): string[] {
   return result;
 }
 
+function sanitizeBlocking(value: unknown): TaskBlockingFilter {
+  return typeof value === "string" && BLOCKING_SET.has(value)
+    ? (value as TaskBlockingFilter)
+    : "all";
+}
+
 function sanitizeSort(value: unknown): TaskSort {
   if (typeof value === "string" && SORT_SET.has(value)) {
     return value as TaskSort;
@@ -133,6 +142,7 @@ export function sanitizeListPreference(raw: unknown): ListPreference {
       statuses: uniqueValidStatuses(filtersRaw.statuses),
       priorities: uniqueValidPriorities(filtersRaw.priorities),
       labelNames: uniqueLabelNames(filtersRaw.labelNames),
+      blocking: sanitizeBlocking(filtersRaw.blocking),
     },
     sort: sanitizeSort(record.sort),
     // Absent/garbage persists as the upstream default (parents only) rather

@@ -35,6 +35,7 @@ import type {
   SearchBlockerCandidatesInput,
   SubtaskDoneCounts,
   Task,
+  TaskBlockingSummary,
   TaskDependency,
   TaskLabel,
   TaskThread,
@@ -107,6 +108,11 @@ interface TaskPageRow extends TaskRow {
 
 interface TaskListRevisionRow {
   revision: number;
+}
+
+interface TaskBlockingSummaryRow {
+  task_id: string;
+  unresolved_blocker_count: number;
 }
 
 interface LabelRow {
@@ -222,6 +228,7 @@ function taskQueryFingerprint(
     statuses: normalizedFilterValues(filters.statuses),
     priorities: normalizedFilterValues(filters.priorities),
     labelIds: normalizedFilterValues(filters.labelIds),
+    blocking: filters.blocking ?? "all",
     activeOnly: filters.activeOnly === true,
     parentTaskId:
       filters.parentTaskId === undefined
@@ -744,6 +751,50 @@ export function createTasksStore(db: PluginDatabase) {
     return task;
   }
 
+  function taskBlockingSummaries(
+    taskIds: readonly string[],
+  ): Map<string, TaskBlockingSummary> {
+    const summaries = new Map<string, TaskBlockingSummary>();
+    for (const taskId of taskIds) {
+      summaries.set(taskId, { isBlocked: false, unresolvedBlockerCount: 0 });
+    }
+    for (let offset = 0; offset < taskIds.length; offset += 500) {
+      const ids = taskIds.slice(offset, offset + 500);
+      if (ids.length === 0) continue;
+      const placeholders = ids.map(() => "?").join(", ");
+      const rows = db
+        .prepare<string[], TaskBlockingSummaryRow>(
+          `
+            SELECT candidate.id AS task_id,
+              CASE WHEN candidate.status IN ('done', 'canceled') THEN 0
+                ELSE COUNT(blocker.id)
+              END AS unresolved_blocker_count
+            FROM tasks candidate
+            LEFT JOIN task_dependencies dependency
+              ON dependency.dependent_task_id = candidate.id
+            LEFT JOIN tasks blocker
+              ON blocker.id = dependency.blocker_task_id
+              AND blocker.status NOT IN ('done', 'canceled')
+            WHERE candidate.id IN (${placeholders})
+            GROUP BY candidate.id, candidate.status
+          `,
+        )
+        .all(...ids);
+      for (const row of rows) {
+        summaries.set(row.task_id, {
+          isBlocked: row.unresolved_blocker_count > 0,
+          unresolvedBlockerCount: row.unresolved_blocker_count,
+        });
+      }
+    }
+    return summaries;
+  }
+
+  function getTaskBlockingSummary(taskId: string): TaskBlockingSummary {
+    requireTask(taskId);
+    return taskBlockingSummaries([taskId]).get(taskId)!;
+  }
+
   function listTaskDependencies(taskId: string): {
     blockedBy: TaskDependency[];
     blocks: TaskDependency[];
@@ -1184,6 +1235,20 @@ export function createTasksStore(db: PluginDatabase) {
           WHERE tl.task_id = t.id AND tl.label_id IN (${names.join(", ")})
         )`);
       }
+    }
+    const blocking = filters.blocking ?? "all";
+    if (blocking !== "all") {
+      const blockedExpression = `(
+        t.status NOT IN ('done', 'canceled')
+        AND EXISTS (
+          SELECT 1
+          FROM task_dependencies dependency
+          JOIN tasks blocker ON blocker.id = dependency.blocker_task_id
+          WHERE dependency.dependent_task_id = t.id
+            AND blocker.status NOT IN ('done', 'canceled')
+        )
+      )`;
+      clauses.push(blocking === "blocked" ? blockedExpression : `NOT ${blockedExpression}`);
     }
     if (filters.activeOnly === true) {
       clauses.push(`EXISTS (
@@ -2128,6 +2193,8 @@ export function createTasksStore(db: PluginDatabase) {
     createTask,
     getTask,
     getTaskByKey,
+    getTaskBlockingSummary,
+    taskBlockingSummaries,
     listTasksPage,
     listTasks,
     listSubtasks,

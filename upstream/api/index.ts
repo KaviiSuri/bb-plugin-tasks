@@ -214,17 +214,25 @@ export function publishCommentsChanged(
 }
 
 function apiTask(store: TasksApiStore, task: StoredTask): Task {
+  const blocking = store.tasks.getTaskBlockingSummary(task.id);
   return {
     ...task,
     labelIds: store.taskLabelIds([task.id]).get(task.id) ?? [],
+    ...blocking,
   };
 }
 
 function apiTasks(store: TasksApiStore, tasks: StoredTask[]): Task[] {
-  const labelsByTask = store.taskLabelIds(tasks.map((task) => task.id));
+  const taskIds = tasks.map((task) => task.id);
+  const labelsByTask = store.taskLabelIds(taskIds);
+  const blockingByTask = store.tasks.taskBlockingSummaries(taskIds);
   return tasks.map((task) => ({
     ...task,
     labelIds: labelsByTask.get(task.id) ?? [],
+    ...(blockingByTask.get(task.id) ?? {
+      isBlocked: false,
+      unresolvedBlockerCount: 0,
+    }),
   }));
 }
 
@@ -505,6 +513,50 @@ function writeSystemComments(
       notifiedCount: 0,
     });
   }
+}
+
+function blockingImpactTasks(
+  store: TasksApiStore,
+  taskId: string,
+): StoredTask[] {
+  const task = store.tasks.getTask(taskId);
+  if (!task) throw new Error(`Task not found: ${taskId}`);
+  return [
+    task,
+    ...store.tasks
+      .listTaskDependencies(taskId)
+      .blocks.map((edge) => store.tasks.getTask(edge.dependentTaskId))
+      .filter((dependent): dependent is StoredTask => dependent !== undefined),
+  ];
+}
+
+function blockingSnapshot(
+  store: TasksApiStore,
+  tasks: readonly StoredTask[],
+) {
+  return store.tasks.taskBlockingSummaries(tasks.map((task) => task.id));
+}
+
+function writeBlockingTransitionComments(
+  store: TasksApiStore,
+  tasks: readonly StoredTask[],
+  before: ReturnType<typeof blockingSnapshot>,
+  authorName: string,
+): Set<string> {
+  const after = blockingSnapshot(store, tasks);
+  const transitioned = new Set<string>();
+  for (const task of tasks) {
+    const wasBlocked = before.get(task.id)?.isBlocked ?? false;
+    const isBlocked = after.get(task.id)?.isBlocked ?? false;
+    if (wasBlocked === isBlocked) continue;
+    writeSystemComments(store, task.id, authorName, [
+      isBlocked
+        ? `Blocking state changed to Blocked by ${authorName}`
+        : `Blocking state changed to Not blocked by ${authorName}`,
+    ]);
+    transitioned.add(task.id);
+  }
+  return transitioned;
 }
 
 function attachmentMetadata(attachment: StoredAttachment): AttachmentMetadata {
@@ -990,6 +1042,12 @@ export function registerHandlers(
           validateTaskLabels(store, current.projectId, input.labelIds);
         }
 
+        const statusWillChange =
+          input.status !== undefined && input.status !== current.status;
+        const impactTasks = statusWillChange
+          ? blockingImpactTasks(store, current.id)
+          : [current];
+        const blockingBefore = blockingSnapshot(store, impactTasks);
         const result = store.transaction(() => {
           const beforeLabelIds = store.tasks
             .listTaskLabels(current.id)
@@ -1028,16 +1086,32 @@ export function registerHandlers(
             bodies.push(labelChangeBody(store, current.id, input.authorName));
           }
           writeSystemComments(store, current.id, input.authorName, bodies);
+          const transitioned = statusWillChange
+            ? writeBlockingTransitionComments(
+                store,
+                impactTasks,
+                blockingBefore,
+                input.authorName,
+              )
+            : new Set<string>();
           return {
             task: apiTask(store, updated),
             systemCommentsWritten: bodies.length,
+            transitioned,
           };
         });
 
         publishTasksChanged(bb, result.task.id, result.task.projectId);
-        if (result.systemCommentsWritten > 0) {
-          publishCommentsChanged(bb, result.task.id);
+        if (statusWillChange) {
+          for (const affected of impactTasks) {
+            if (affected.id !== result.task.id) {
+              publishTasksChanged(bb, affected.id, affected.projectId);
+            }
+          }
         }
+        const commentTaskIds = new Set(result.transitioned);
+        if (result.systemCommentsWritten > 0) commentTaskIds.add(result.task.id);
+        for (const taskId of commentTaskIds) publishCommentsChanged(bb, taskId);
         return { ok: true, task: result.task };
       } catch (error) {
         if (error instanceof TasksDomainFailure) return taskFailure(error);
@@ -1140,6 +1214,7 @@ export function registerHandlers(
         statuses: input.statuses,
         priorities: input.priorities,
         labelIds: input.labelIds,
+        blocking: input.blocking,
         activeOnly: input.activeOnly,
         parentTaskId: input.parentTaskId,
         search: input.search,
@@ -1155,6 +1230,11 @@ export function registerHandlers(
     boardMove(input) {
       const current = store.tasks.getTask(input.taskId);
       if (!current) throw new Error(`Task not found: ${input.taskId}`);
+      const statusWillChange = input.status !== current.status;
+      const impactTasks = statusWillChange
+        ? blockingImpactTasks(store, current.id)
+        : [current];
+      const blockingBefore = blockingSnapshot(store, impactTasks);
       const result = store.transaction(() => {
         const moved = store.tasks.updatePosition(current.id, {
           status: input.status,
@@ -1167,10 +1247,27 @@ export function registerHandlers(
             `Status changed to ${statusName(moved.status)} by ${input.authorName}`,
           ]);
         }
-        return { task: apiTask(store, moved), statusChanged };
+        const transitioned = statusChanged
+          ? writeBlockingTransitionComments(
+              store,
+              impactTasks,
+              blockingBefore,
+              input.authorName,
+            )
+          : new Set<string>();
+        return { task: apiTask(store, moved), statusChanged, transitioned };
       });
       publishTasksChanged(bb, result.task.id, result.task.projectId);
-      if (result.statusChanged) publishCommentsChanged(bb, result.task.id);
+      if (result.statusChanged) {
+        for (const affected of impactTasks) {
+          if (affected.id !== result.task.id) {
+            publishTasksChanged(bb, affected.id, affected.projectId);
+          }
+        }
+      }
+      const commentTaskIds = new Set(result.transitioned);
+      if (result.statusChanged) commentTaskIds.add(result.task.id);
+      for (const taskId of commentTaskIds) publishCommentsChanged(bb, taskId);
       return { ok: true, task: result.task };
     },
     createLabel(input) {

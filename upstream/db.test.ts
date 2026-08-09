@@ -36,6 +36,7 @@ function cursorForEmptyArrayFilter(
     statuses: filter === "statuses" ? [] : null,
     priorities: filter === "priorities" ? [] : null,
     labelIds: filter === "labelIds" ? [] : null,
+    blocking: "all",
     activeOnly: false,
     parentTaskId: { specified: false, value: null },
     search: null,
@@ -59,7 +60,7 @@ describe("tasks storage", () => {
             { count: number }
           >("SELECT COUNT(*) AS count FROM schema_version")
           .get()?.count,
-      ).toBe(8);
+      ).toBe(9);
     } finally {
       await harness.dispose();
     }
