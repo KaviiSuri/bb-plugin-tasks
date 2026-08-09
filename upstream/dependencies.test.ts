@@ -191,6 +191,181 @@ describe("task dependency contract and RPC", () => {
   });
 });
 
+describe("dependency cleanup during deletion", () => {
+  it("deletes every incident edge and records directional activity on task survivors", async () => {
+    const db = database();
+    const fake = fakeBb(db);
+    const store = createStore(fake.bb);
+    const { dependent, blocker, third } = projectAndTasks(store.tasks);
+    const handlers = registerHandlers(fake.bb, store);
+    store.tasks.addTaskDependencies(dependent.id, [blocker.id]);
+    store.tasks.addTaskDependencies(third.id, [dependent.id]);
+
+    await expect(
+      handlers.deleteTask({ taskId: dependent.id }),
+    ).resolves.toEqual({
+      deleted: true,
+    });
+
+    expect(store.tasks.getTask(dependent.id)).toBeUndefined();
+    expect(store.tasks.listTaskDependencies(blocker.id).blocks).toEqual([]);
+    expect(store.tasks.listTaskDependencies(third.id).blockedBy).toEqual([]);
+    expect(
+      db.prepare("SELECT COUNT(*) AS count FROM task_dependencies").get(),
+    ).toEqual({ count: 0 });
+    expect(store.tasks.listComments(blocker.id).at(-1)).toMatchObject({
+      kind: "system",
+      authorName: "Tasks",
+      body: `Blocks ${dependent.key} removed because ${dependent.key} was deleted`,
+    });
+    expect(store.tasks.listComments(third.id).at(-1)?.body).toBe(
+      `Blocked by ${dependent.key} removed because ${dependent.key} was deleted`,
+    );
+    expect(fake.realtimeSignals).toEqual([
+      {
+        channel: "tasks:changed",
+        payload: { taskId: dependent.id, projectId: dependent.projectId },
+      },
+      {
+        channel: "tasks:changed",
+        payload: { taskId: blocker.id, projectId: blocker.projectId },
+      },
+      { channel: "comments:changed", payload: { taskId: blocker.id } },
+      {
+        channel: "tasks:changed",
+        payload: { taskId: third.id, projectId: third.projectId },
+      },
+      { channel: "comments:changed", payload: { taskId: third.id } },
+    ]);
+    db.close();
+  });
+
+  it("force-deletes a project after recording only cross-project survivor activity", async () => {
+    const db = database();
+    const fake = fakeBb(db);
+    const store = createStore(fake.bb);
+    const { firstProject, dependent, blocker, third } = projectAndTasks(
+      store.tasks,
+    );
+    const externalDependent = store.tasks.createTask({
+      projectId: blocker.projectId,
+      title: "External dependent",
+    });
+    const handlers = registerHandlers(fake.bb, store);
+    store.tasks.addTaskDependencies(dependent.id, [blocker.id]);
+    store.tasks.addTaskDependencies(third.id, [dependent.id]);
+    store.tasks.addTaskDependencies(externalDependent.id, [third.id]);
+    db.exec(`
+      CREATE TRIGGER reject_deleted_project_activity
+      BEFORE INSERT ON comments
+      WHEN NEW.task_id IN ('${dependent.id}', '${third.id}')
+      BEGIN
+        SELECT RAISE(ABORT, 'activity written to a cascading task');
+      END;
+    `);
+
+    await expect(
+      handlers.deleteProject({ projectId: firstProject.id, force: true }),
+    ).resolves.toEqual({ ok: true, deleted: true });
+
+    expect(store.tasks.getProject(firstProject.id)).toBeUndefined();
+    expect(store.tasks.getTask(dependent.id)).toBeUndefined();
+    expect(store.tasks.getTask(third.id)).toBeUndefined();
+    expect(store.tasks.listTaskDependencies(blocker.id).blocks).toEqual([]);
+    expect(
+      store.tasks.listTaskDependencies(externalDependent.id).blockedBy,
+    ).toEqual([]);
+    expect(store.tasks.listComments(blocker.id).at(-1)?.body).toBe(
+      `Blocks ${dependent.key} removed because ${dependent.key} was deleted`,
+    );
+    expect(store.tasks.listComments(externalDependent.id).at(-1)?.body).toBe(
+      `Blocked by ${third.key} removed because ${third.key} was deleted`,
+    );
+    expect(fake.realtimeSignals).toEqual([
+      {
+        channel: "tasks:changed",
+        payload: { taskId: blocker.id, projectId: blocker.projectId },
+      },
+      { channel: "comments:changed", payload: { taskId: blocker.id } },
+      {
+        channel: "tasks:changed",
+        payload: {
+          taskId: externalDependent.id,
+          projectId: externalDependent.projectId,
+        },
+      },
+      {
+        channel: "comments:changed",
+        payload: { taskId: externalDependent.id },
+      },
+      {
+        channel: "projects:changed",
+        payload: { projectId: firstProject.id },
+      },
+    ]);
+    db.close();
+  });
+
+  it("rolls survivor activity and edges back when task deletion fails", async () => {
+    const db = database();
+    const fake = fakeBb(db);
+    const store = createStore(fake.bb);
+    const { dependent, blocker } = projectAndTasks(store.tasks);
+    const handlers = registerHandlers(fake.bb, store);
+    store.tasks.addTaskDependencies(dependent.id, [blocker.id]);
+    db.exec(`
+      CREATE TRIGGER reject_dependency_task_delete
+      BEFORE DELETE ON tasks
+      WHEN OLD.id = '${dependent.id}'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected deletion failure');
+      END;
+    `);
+
+    await expect(handlers.deleteTask({ taskId: dependent.id })).rejects.toThrow(
+      "injected deletion failure",
+    );
+
+    expect(store.tasks.getTask(dependent.id)).toBeDefined();
+    expect(
+      store.tasks.listTaskDependencies(dependent.id).blockedBy,
+    ).toHaveLength(1);
+    expect(store.tasks.listComments(blocker.id)).toEqual([]);
+    expect(fake.realtimeSignals).toEqual([]);
+    db.close();
+  });
+
+  it("rolls cross-project activity and edges back when project deletion fails", async () => {
+    const db = database();
+    const fake = fakeBb(db);
+    const store = createStore(fake.bb);
+    const { firstProject, dependent, blocker } = projectAndTasks(store.tasks);
+    const handlers = registerHandlers(fake.bb, store);
+    store.tasks.addTaskDependencies(dependent.id, [blocker.id]);
+    db.exec(`
+      CREATE TRIGGER reject_dependency_project_delete
+      BEFORE DELETE ON projects
+      WHEN OLD.id = '${firstProject.id}'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected project deletion failure');
+      END;
+    `);
+
+    await expect(
+      handlers.deleteProject({ projectId: firstProject.id, force: true }),
+    ).rejects.toThrow("injected project deletion failure");
+
+    expect(store.tasks.getProject(firstProject.id)).toBeDefined();
+    expect(store.tasks.getTask(dependent.id)).toBeDefined();
+    expect(
+      store.tasks.listTaskDependencies(dependent.id).blockedBy,
+    ).toHaveLength(1);
+    expect(store.tasks.listComments(blocker.id)).toEqual([]);
+    expect(fake.realtimeSignals).toEqual([]);
+    db.close();
+  });
+});
+
 describe("task dependency CLI", () => {
   it("adds/lists/removes with keys and ULID ids through the canonical harness", async () => {
     const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });

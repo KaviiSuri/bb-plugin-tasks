@@ -316,6 +316,56 @@ function mutateTaskDependencies(
   }
 }
 
+interface DependencyDeletionActivity {
+  survivor: StoredTask;
+  body: string;
+}
+
+/**
+ * Snapshot dependency-removal activity before deleting one or more tasks.
+ * Endpoints in `deletedTasks` are deliberately excluded, so a project cascade
+ * never attempts to write comments on tasks that are about to disappear.
+ */
+function dependencyDeletionActivity(
+  store: TasksApiStore,
+  deletedTasks: readonly StoredTask[],
+): DependencyDeletionActivity[] {
+  const deletedTaskIds = new Set(deletedTasks.map((task) => task.id));
+  const activity: DependencyDeletionActivity[] = [];
+
+  for (const deletedTask of deletedTasks) {
+    const dependencies = store.tasks.listTaskDependencies(deletedTask.id);
+    for (const edge of dependencies.blockedBy) {
+      if (deletedTaskIds.has(edge.blockerTaskId)) continue;
+      const survivor = store.tasks.getTask(edge.blockerTaskId);
+      if (!survivor) throw new Error(`Task not found: ${edge.blockerTaskId}`);
+      activity.push({
+        survivor,
+        body: `Blocks ${deletedTask.key} removed because ${deletedTask.key} was deleted`,
+      });
+    }
+    for (const edge of dependencies.blocks) {
+      if (deletedTaskIds.has(edge.dependentTaskId)) continue;
+      const survivor = store.tasks.getTask(edge.dependentTaskId);
+      if (!survivor) throw new Error(`Task not found: ${edge.dependentTaskId}`);
+      activity.push({
+        survivor,
+        body: `Blocked by ${deletedTask.key} removed because ${deletedTask.key} was deleted`,
+      });
+    }
+  }
+  return activity;
+}
+
+function writeDependencyDeletionActivity(
+  store: TasksApiStore,
+  activity: readonly DependencyDeletionActivity[],
+): void {
+  for (const event of activity) {
+    writeSystemComments(store, event.survivor.id, "Tasks", [event.body]);
+  }
+}
+
 function validateTaskParent(
   store: TasksApiStore,
   projectId: string,
@@ -794,22 +844,38 @@ export function registerHandlers(
     },
     async deleteProject(input) {
       try {
+        if (!store.tasks.getProject(input.projectId)) {
+          return { ok: true, deleted: false };
+        }
         if (!input.force && store.projectTaskCount(input.projectId) > 0) {
           fail(
             "project_not_empty",
             "A project must be empty before it can be deleted; pass force: true to delete its tasks",
           );
         }
-        const taskIds = store.tasks
-          .listTasks({ projectId: input.projectId })
-          .map((task) => task.id);
-        const attachments = attachmentsForTasks(store.tasks, taskIds);
-        const deleted = store.tasks.deleteProject(input.projectId);
-        if (deleted) {
+        const tasks = store.tasks.listTasks({ projectId: input.projectId });
+        const attachments = attachmentsForTasks(
+          store.tasks,
+          tasks.map((task) => task.id),
+        );
+        const result = store.transaction(() => {
+          const activity = dependencyDeletionActivity(store, tasks);
+          writeDependencyDeletionActivity(store, activity);
+          const deleted = store.tasks.deleteProject(input.projectId);
+          if (!deleted) {
+            throw new Error(`Project not found: ${input.projectId}`);
+          }
+          return {
+            deleted,
+            survivors: activity.map((event) => event.survivor),
+          };
+        });
+        if (result.deleted) {
           await removeAttachmentBlobs(bb, store.tasks, attachments);
+          publishDependencyChanges(bb, result.survivors);
           publishProjectsChanged(bb, input.projectId);
         }
-        return { ok: true, deleted };
+        return { ok: true, deleted: result.deleted };
       } catch (error) {
         if (error instanceof TasksDomainFailure) return projectFailure(error);
         throw error;
@@ -919,13 +985,19 @@ export function registerHandlers(
     },
     async deleteTask(input) {
       const task = store.tasks.getTask(input.taskId);
+      if (!task) return { deleted: false };
       const attachments = attachmentsForTasks(store.tasks, [input.taskId]);
-      const deleted = store.tasks.deleteTask(input.taskId);
-      if (deleted && task) {
-        await removeAttachmentBlobs(bb, store.tasks, attachments);
-        publishTasksChanged(bb, task.id, task.projectId);
-      }
-      return { deleted };
+      const result = store.transaction(() => {
+        const activity = dependencyDeletionActivity(store, [task]);
+        writeDependencyDeletionActivity(store, activity);
+        const deleted = store.tasks.deleteTask(input.taskId);
+        if (!deleted) throw new Error(`Task not found: ${input.taskId}`);
+        return { deleted, survivors: activity.map((event) => event.survivor) };
+      });
+      await removeAttachmentBlobs(bb, store.tasks, attachments);
+      publishTasksChanged(bb, task.id, task.projectId);
+      publishDependencyChanges(bb, result.survivors);
+      return { deleted: result.deleted };
     },
     listTaskDependencies(input) {
       const dependencies = store.tasks.listTaskDependencies(input.taskId);
