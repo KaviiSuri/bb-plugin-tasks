@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -12,10 +13,17 @@ import { BlockedBadge } from "./badge.js";
 const mocks = vi.hoisted(() => ({
   call: vi.fn(),
   go: vi.fn(),
+  invalidate: null as null | (() => void),
 }));
 
 vi.mock("../../shell/data.js", () => ({
   useTasksRpc: () => ({ call: mocks.call }),
+  useInvalidation: (
+    _channels: readonly string[],
+    invalidate: () => void,
+  ) => {
+    mocks.invalidate = invalidate;
+  },
 }));
 vi.mock("../../shell/routes.js", () => ({
   useTasksNavigation: () => ({ go: mocks.go }),
@@ -40,7 +48,12 @@ const task: Task = {
   unresolvedBlockerCount: 1,
 };
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  mocks.call.mockReset();
+  mocks.go.mockReset();
+  mocks.invalidate = null;
+});
 
 const blocker = {
   task: {
@@ -49,8 +62,8 @@ const blocker = {
     number: 1,
     key: "DEP-1",
     title: "Ship dependency",
-    isBlocked: false,
-    unresolvedBlockerCount: 0,
+    isBlocked: true,
+    unresolvedBlockerCount: 1,
   },
   project: {
     id: task.projectId,
@@ -72,6 +85,8 @@ const resolvedBlocker = {
     key: "DEP-2",
     title: "Resolved dependency",
     status: "done" as const,
+    isBlocked: false,
+    unresolvedBlockerCount: 0,
   },
 };
 
@@ -96,6 +111,7 @@ describe("BlockedBadge accessibility", () => {
       screen.getByRole("list", { name: "Direct unresolved blockers" }),
     ).toBeTruthy();
     expect(screen.queryByText("Resolved dependency")).toBeNull();
+    expect(screen.getByLabelText("DEP-1 is also blocked")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /DEP-1/ }));
     expect(mocks.go).toHaveBeenCalledWith({ kind: "task", taskKey: "DEP-1" });
 
@@ -116,6 +132,38 @@ describe("BlockedBadge accessibility", () => {
         name: "Unresolved blockers for BLK-2",
       }),
     ).toBeTruthy();
+  });
+
+  it("refreshes cached blocker details after task or project invalidation", async () => {
+    mocks.call
+      .mockResolvedValueOnce({ blockedBy: [blocker], blocks: [] })
+      .mockResolvedValueOnce({
+        blockedBy: [
+          {
+            ...blocker,
+            task: {
+              ...blocker.task,
+              title: "Renamed dependency",
+              isBlocked: false,
+              unresolvedBlockerCount: 0,
+            },
+            project: { ...blocker.project, name: "Renamed project" },
+          },
+        ],
+        blocks: [],
+      });
+    render(<BlockedBadge task={task} />);
+    fireEvent.mouseEnter(
+      screen.getByRole("button", { name: "Blocked: 1 unresolved blocker" }),
+    );
+    await screen.findByText("Ship dependency");
+
+    act(() => mocks.invalidate?.());
+
+    expect(await screen.findByText("Renamed dependency")).toBeTruthy();
+    expect(screen.getByText("Renamed project")).toBeTruthy();
+    expect(screen.queryByLabelText("DEP-1 is also blocked")).toBeNull();
+    expect(mocks.call).toHaveBeenCalledTimes(2);
   });
 
   it("does not render for terminal or unblocked summaries", () => {

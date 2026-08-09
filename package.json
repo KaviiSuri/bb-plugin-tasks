@@ -76,7 +76,7 @@
   "scripts": {
     "gen:shim": "node scripts/gen-shared-ui-shim.mjs",
     "build": "npm run gen:shim && bb plugin build .",
-    "test:blocking": "vitest run --config vitest.blocking.config.ts",
+    "test:blocking": "vitest run --config upstream/vitest.config.ts blocking.test.ts dependencies.test.ts views/blocking views/list/list-preference.test.ts",
     "sync:upstream": "bash scripts/sync-upstream.sh"
   }
 }

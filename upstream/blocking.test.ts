@@ -195,7 +195,37 @@ describe("derived blocking storage", () => {
 });
 
 describe("blocking RPC lifecycle and reconnect", () => {
-  it("returns summaries, records only effective transitions, and invalidates dependents", () => {
+  it.each(["done", "canceled"] as const)(
+    "suppresses synthetic unblocked activity when the dependent moves to %s",
+    (terminalStatus) => {
+      const db = database();
+      const fake = fakeBb(db);
+      const store = createStore(fake.bb);
+      const { dependent, first } = fixtures(store.tasks);
+      const handlers = registerHandlers(fake.bb, store);
+      handlers.addTaskDependencies({
+        dependentTaskId: dependent.id,
+        blockerTaskIds: [first.id],
+        authorName: "Tester",
+      });
+      const before = transitionBodies(store.tasks, dependent.id);
+
+      handlers.updateTask({
+        taskId: dependent.id,
+        status: terminalStatus,
+        authorName: "Tester",
+      });
+
+      expect(transitionBodies(store.tasks, dependent.id)).toEqual(before);
+      expect(handlers.getTask({ taskId: dependent.id }).task).toMatchObject({
+        isBlocked: false,
+        unresolvedBlockerCount: 0,
+      });
+      db.close();
+    },
+  );
+
+  it("returns summaries, distinguishes blocker resolution, and invalidates dependents", () => {
     const db = database();
     const fake = fakeBb(db);
     const store = createStore(fake.bb);
@@ -208,7 +238,7 @@ describe("blocking RPC lifecycle and reconnect", () => {
       authorName: "Tester",
     });
     expect(transitionBodies(store.tasks, dependent.id)).toEqual([
-      "Blocking state changed to Blocked by Tester",
+      "Blocking state changed to Blocked after dependency addition by Tester",
     ]);
 
     handlers.addTaskDependencies({
@@ -232,8 +262,8 @@ describe("blocking RPC lifecycle and reconnect", () => {
       authorName: "Tester",
     });
     expect(transitionBodies(store.tasks, dependent.id)).toEqual([
-      "Blocking state changed to Blocked by Tester",
-      "Blocking state changed to Not blocked by Tester",
+      "Blocking state changed to Blocked after dependency addition by Tester",
+      `Blocking state changed to Not blocked after ${first.key} moved to Done by Tester`,
     ]);
 
     handlers.updateTask({
@@ -242,10 +272,28 @@ describe("blocking RPC lifecycle and reconnect", () => {
       authorName: "Tester",
     });
     expect(transitionBodies(store.tasks, dependent.id)).toEqual([
-      "Blocking state changed to Blocked by Tester",
-      "Blocking state changed to Not blocked by Tester",
-      "Blocking state changed to Blocked by Tester",
+      "Blocking state changed to Blocked after dependency addition by Tester",
+      `Blocking state changed to Not blocked after ${first.key} moved to Done by Tester`,
+      `Blocking state changed to Blocked after ${second.key} reopened by Tester`,
     ]);
+
+    handlers.updateTask({
+      taskId: second.id,
+      status: "canceled",
+      authorName: "Tester",
+    });
+    expect(transitionBodies(store.tasks, dependent.id).at(-1)).toBe(
+      `Blocking state changed to Not blocked after ${second.key} moved to Canceled by Tester`,
+    );
+    handlers.updateTask({
+      taskId: second.id,
+      status: "todo",
+      authorName: "Tester",
+    });
+    const beforeTerminalDependent = transitionBodies(
+      store.tasks,
+      dependent.id,
+    );
 
     handlers.boardMove({
       taskId: dependent.id,
@@ -256,6 +304,9 @@ describe("blocking RPC lifecycle and reconnect", () => {
       isBlocked: false,
       unresolvedBlockerCount: 0,
     });
+    expect(transitionBodies(store.tasks, dependent.id)).toEqual(
+      beforeTerminalDependent,
+    );
     handlers.boardMove({
       taskId: dependent.id,
       status: "todo",
@@ -265,6 +316,9 @@ describe("blocking RPC lifecycle and reconnect", () => {
       isBlocked: true,
       unresolvedBlockerCount: 1,
     });
+    expect(transitionBodies(store.tasks, dependent.id).at(-1)).toBe(
+      "Blocking state changed to Blocked after reopening by Tester",
+    );
 
     expect(fake.realtimeSignals).toEqual(
       expect.arrayContaining([

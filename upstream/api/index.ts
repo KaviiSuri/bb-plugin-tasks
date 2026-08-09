@@ -294,13 +294,22 @@ function mutateTaskDependencies(
     });
     const pastTense = action === "add" ? "added" : "removed";
     const dependencies = store.transaction(() => {
-      const changed =
-        action === "add"
-          ? store.tasks.addTaskDependencies(dependent.id, input.blockerTaskIds)
-          : store.tasks.removeTaskDependencies(
-              dependent.id,
-              input.blockerTaskIds,
-            );
+      const { value: changed } = mutateWithBlockingTransitions(
+        store,
+        [dependent],
+        input.authorName,
+        {
+          kind: "dependency",
+          action: action === "add" ? "added" : "removed",
+        },
+        () =>
+          action === "add"
+            ? store.tasks.addTaskDependencies(dependent.id, input.blockerTaskIds)
+            : store.tasks.removeTaskDependencies(
+                dependent.id,
+                input.blockerTaskIds,
+              ),
+      );
       for (const blocker of blockers) {
         writeSystemComments(store, dependent.id, input.authorName, [
           `Blocked by ${blocker.key} ${pastTense} by ${input.authorName}`,
@@ -537,26 +546,65 @@ function blockingSnapshot(
   return store.tasks.taskBlockingSummaries(tasks.map((task) => task.id));
 }
 
-function writeBlockingTransitionComments(
+type BlockingTransitionCause =
+  | { kind: "dependency"; action: "added" | "removed" }
+  | {
+      kind: "status";
+      changedTask: StoredTask;
+      to: StoredTask["status"];
+    };
+
+function isTerminalStatus(status: StoredTask["status"]): boolean {
+  return status === "done" || status === "canceled";
+}
+
+function blockingTransitionBody(
+  task: StoredTask,
+  isBlocked: boolean,
+  cause: BlockingTransitionCause,
+  authorName: string,
+): string | null {
+  if (cause.kind === "dependency") {
+    return cause.action === "added"
+      ? `Blocking state changed to Blocked after dependency addition by ${authorName}`
+      : `Blocking state changed to Not blocked after dependency removal by ${authorName}`;
+  }
+
+  if (cause.changedTask.id === task.id) {
+    // Terminal dependents deliberately suppress a synthetic "Not blocked"
+    // event: finishing/canceling the work is not resolution of its blockers.
+    if (!isBlocked && isTerminalStatus(cause.to)) return null;
+    return `Blocking state changed to Blocked after reopening by ${authorName}`;
+  }
+
+  if (isBlocked) {
+    return `Blocking state changed to Blocked after ${cause.changedTask.key} reopened by ${authorName}`;
+  }
+  const resolution = cause.to === "done" ? "Done" : "Canceled";
+  return `Blocking state changed to Not blocked after ${cause.changedTask.key} moved to ${resolution} by ${authorName}`;
+}
+
+function mutateWithBlockingTransitions<T>(
   store: TasksApiStore,
   tasks: readonly StoredTask[],
-  before: ReturnType<typeof blockingSnapshot>,
   authorName: string,
-): Set<string> {
+  cause: BlockingTransitionCause,
+  mutation: () => T,
+): { value: T; transitioned: Set<string> } {
+  const before = blockingSnapshot(store, tasks);
+  const value = mutation();
   const after = blockingSnapshot(store, tasks);
   const transitioned = new Set<string>();
   for (const task of tasks) {
     const wasBlocked = before.get(task.id)?.isBlocked ?? false;
     const isBlocked = after.get(task.id)?.isBlocked ?? false;
     if (wasBlocked === isBlocked) continue;
-    writeSystemComments(store, task.id, authorName, [
-      isBlocked
-        ? `Blocking state changed to Blocked by ${authorName}`
-        : `Blocking state changed to Not blocked by ${authorName}`,
-    ]);
+    const body = blockingTransitionBody(task, isBlocked, cause, authorName);
+    if (body === null) continue;
+    writeSystemComments(store, task.id, authorName, [body]);
     transitioned.add(task.id);
   }
-  return transitioned;
+  return { value, transitioned };
 }
 
 function attachmentMetadata(attachment: StoredAttachment): AttachmentMetadata {
@@ -1047,19 +1095,33 @@ export function registerHandlers(
         const impactTasks = statusWillChange
           ? blockingImpactTasks(store, current.id)
           : [current];
-        const blockingBefore = blockingSnapshot(store, impactTasks);
         const result = store.transaction(() => {
           const beforeLabelIds = store.tasks
             .listTaskLabels(current.id)
             .map((link) => link.labelId);
-          const updated = store.tasks.updateTask(current.id, {
-            title: input.title,
-            description: input.description,
-            status: input.status,
-            priority: input.priority,
-            dueDate: input.dueDate,
-            parentTaskId: input.parentTaskId,
-          });
+          const update = () =>
+            store.tasks.updateTask(current.id, {
+              title: input.title,
+              description: input.description,
+              status: input.status,
+              priority: input.priority,
+              dueDate: input.dueDate,
+              parentTaskId: input.parentTaskId,
+            });
+          const transition = statusWillChange
+            ? mutateWithBlockingTransitions(
+                store,
+                impactTasks,
+                input.authorName,
+                {
+                  kind: "status",
+                  changedTask: current,
+                  to: input.status!,
+                },
+                update,
+              )
+            : { value: update(), transitioned: new Set<string>() };
+          const updated = transition.value;
           if (input.labelIds) {
             replaceTaskLabels(store, current.id, input.labelIds);
           }
@@ -1086,18 +1148,10 @@ export function registerHandlers(
             bodies.push(labelChangeBody(store, current.id, input.authorName));
           }
           writeSystemComments(store, current.id, input.authorName, bodies);
-          const transitioned = statusWillChange
-            ? writeBlockingTransitionComments(
-                store,
-                impactTasks,
-                blockingBefore,
-                input.authorName,
-              )
-            : new Set<string>();
           return {
             task: apiTask(store, updated),
             systemCommentsWritten: bodies.length,
-            transitioned,
+            transitioned: transition.transitioned,
           };
         });
 
@@ -1234,28 +1288,38 @@ export function registerHandlers(
       const impactTasks = statusWillChange
         ? blockingImpactTasks(store, current.id)
         : [current];
-      const blockingBefore = blockingSnapshot(store, impactTasks);
       const result = store.transaction(() => {
-        const moved = store.tasks.updatePosition(current.id, {
-          status: input.status,
-          beforeTaskId: input.beforeTaskId,
-          afterTaskId: input.afterTaskId,
-        });
+        const move = () =>
+          store.tasks.updatePosition(current.id, {
+            status: input.status,
+            beforeTaskId: input.beforeTaskId,
+            afterTaskId: input.afterTaskId,
+          });
+        const transition = statusWillChange
+          ? mutateWithBlockingTransitions(
+              store,
+              impactTasks,
+              input.authorName,
+              {
+                kind: "status",
+                changedTask: current,
+                to: input.status,
+              },
+              move,
+            )
+          : { value: move(), transitioned: new Set<string>() };
+        const moved = transition.value;
         const statusChanged = moved.status !== current.status;
         if (statusChanged) {
           writeSystemComments(store, current.id, input.authorName, [
             `Status changed to ${statusName(moved.status)} by ${input.authorName}`,
           ]);
         }
-        const transitioned = statusChanged
-          ? writeBlockingTransitionComments(
-              store,
-              impactTasks,
-              blockingBefore,
-              input.authorName,
-            )
-          : new Set<string>();
-        return { task: apiTask(store, moved), statusChanged, transitioned };
+        return {
+          task: apiTask(store, moved),
+          statusChanged,
+          transitioned: transition.transitioned,
+        };
       });
       publishTasksChanged(bb, result.task.id, result.task.projectId);
       if (result.statusChanged) {

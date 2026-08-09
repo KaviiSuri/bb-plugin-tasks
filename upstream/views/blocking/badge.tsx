@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { DependencyTask, Task } from "../../shared/contract.js";
-import { useTasksRpc } from "../../shell/data.js";
+import { useInvalidation, useTasksRpc } from "../../shell/data.js";
 import { useTasksNavigation } from "../../shell/routes.js";
 import {
   Popover,
@@ -29,6 +29,14 @@ export function BlockedBadge({
   const [blockers, setBlockers] = useState<DependencyTask[] | undefined>();
   const [error, setError] = useState<string | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const invalidateDetails = useCallback(() => {
+    setBlockers(undefined);
+    setError(null);
+  }, []);
+  useInvalidation(
+    ["tasks:changed", "projects:changed"],
+    invalidateDetails,
+  );
 
   const cancelClose = () => {
     if (closeTimer.current !== null) clearTimeout(closeTimer.current);
@@ -40,9 +48,8 @@ export function BlockedBadge({
   };
 
   useEffect(() => {
-    setBlockers(undefined);
-    setError(null);
-  }, [task.id, task.unresolvedBlockerCount]);
+    invalidateDetails();
+  }, [invalidateDetails, task.id, task.unresolvedBlockerCount]);
 
   useEffect(() => {
     if (!open || blockers !== undefined || error !== null) return;
@@ -136,6 +143,15 @@ export function BlockedBadge({
                   <span className="min-w-0 flex-1 truncate text-sm">
                     {blocker.task.title}
                   </span>
+                  {blocker.task.isBlocked ? (
+                    <span
+                      aria-label={`${blocker.task.key} is also blocked`}
+                      className="inline-flex shrink-0 items-center gap-0.5 rounded border border-warning/40 bg-warning/10 px-1 text-2xs font-medium text-warning"
+                    >
+                      <Icon name="Lock" className="size-2.5" />
+                      Blocked
+                    </span>
+                  ) : null}
                   <span className="max-w-24 truncate text-2xs text-muted-foreground">
                     {blocker.project.name}
                   </span>
