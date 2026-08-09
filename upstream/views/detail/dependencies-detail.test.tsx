@@ -3,6 +3,15 @@ import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadPluginApp, renderSlot } from "@bb/plugin-sdk/testing/app";
 
+if (!globalThis.ResizeObserver) {
+  globalThis.ResizeObserver = class ResizeObserver {
+    constructor(_callback: ResizeObserverCallback) {}
+    observe(_target: Element, _options?: ResizeObserverOptions) {}
+    unobserve(_target: Element) {}
+    disconnect() {}
+  };
+}
+
 const app = await loadPluginApp(() => import("../../app"));
 afterEach(cleanup);
 
@@ -118,7 +127,9 @@ describe("task detail dependencies", () => {
     const section = await slot.findByRole("region", { name: "Dependencies" });
     expect(within(section).getByText("Blocked by")).toBeTruthy();
     expect(within(section).getByText("Blocks")).toBeTruthy();
-    expect(within(section).getByText("Other project · Done")).toBeTruthy();
+    expect(
+      await within(section).findByText("Other project · Done"),
+    ).toBeTruthy();
     expect(within(section).getByText("Finished blocker").className).toContain(
       "line-through",
     );
@@ -149,7 +160,8 @@ describe("task detail dependencies", () => {
 
     fireEvent.click(within(section).getByText("TWO-1"));
     expect(slot.navigateCalls).toContainEqual({
-      target: { kind: "panel", slot: "main" },
+      method: "toPluginPanel",
+      path: "tasks",
       options: { subPath: "task/TWO-1" },
     });
     fireEvent.click(
