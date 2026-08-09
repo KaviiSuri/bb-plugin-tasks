@@ -235,6 +235,20 @@ const MIGRATIONS = [
     END
     WHERE permission_mode IN ('workspace-write', 'readonly');
   `,
+  `
+    CREATE TABLE task_dependencies (
+      dependent_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      blocker_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (dependent_task_id, blocker_task_id),
+      CHECK (dependent_task_id <> blocker_task_id)
+    );
+
+    CREATE INDEX idx_task_dependencies_dependent
+      ON task_dependencies(dependent_task_id, blocker_task_id);
+    CREATE INDEX idx_task_dependencies_blocker
+      ON task_dependencies(blocker_task_id, dependent_task_id);
+  `,
 ] as const;
 
 export function initializeTasksSchema(db: PluginDatabase): void {

@@ -1,6 +1,7 @@
 import type { BbPluginApi, PluginRpcHandlers } from "@bb/plugin-sdk";
 import {
   createTasksStore,
+  TaskDependencyError,
   type Attachment as StoredAttachment,
   type Comment as StoredComment,
   type Task as StoredTask,
@@ -20,6 +21,7 @@ import {
   type SidebarProjectSummary,
   type Task,
   type TaskPullRequest,
+  type DependencyTask,
   type TasksChangedEvent,
   type TasksDomainError,
   type TaskStatus,
@@ -102,10 +104,9 @@ export function createStore(bb: BbPluginApi): TasksApiStore {
     projectTaskCount(projectId: string): number {
       return (
         database
-          .prepare<
-            [string],
-            CountRow
-          >("SELECT COUNT(*) AS count FROM tasks WHERE project_id = ?")
+          .prepare<[string], CountRow>(
+            "SELECT COUNT(*) AS count FROM tasks WHERE project_id = ?",
+          )
           .get(projectId)?.count ?? 0
       );
     },
@@ -223,6 +224,77 @@ function apiTasks(store: TasksApiStore, tasks: StoredTask[]): Task[] {
     ...task,
     labelIds: labelsByTask.get(task.id) ?? [],
   }));
+}
+
+function dependencyTask(store: TasksApiStore, taskId: string): DependencyTask {
+  const task = store.tasks.getTask(taskId);
+  if (!task) throw new Error(`Task not found: ${taskId}`);
+  const project = store.tasks.getProject(task.projectId);
+  if (!project) throw new Error(`Project not found: ${task.projectId}`);
+  return { task: apiTask(store, task), project };
+}
+
+function publishDependencyChanges(
+  bb: BbPluginApi,
+  tasks: readonly StoredTask[],
+): void {
+  const seen = new Set<string>();
+  for (const task of tasks) {
+    if (seen.has(task.id)) continue;
+    seen.add(task.id);
+    publishTasksChanged(bb, task.id, task.projectId);
+    publishCommentsChanged(bb, task.id);
+  }
+}
+
+interface DependencyDeletionActivity {
+  survivor: StoredTask;
+  body: string;
+}
+
+/**
+ * Snapshot dependency-removal activity before deleting one or more tasks.
+ * Endpoints in `deletedTasks` are deliberately excluded, so a project cascade
+ * never attempts to write comments on tasks that are about to disappear.
+ */
+function dependencyDeletionActivity(
+  store: TasksApiStore,
+  deletedTasks: readonly StoredTask[],
+): DependencyDeletionActivity[] {
+  const deletedTaskIds = new Set(deletedTasks.map((task) => task.id));
+  const activity: DependencyDeletionActivity[] = [];
+
+  for (const deletedTask of deletedTasks) {
+    const dependencies = store.tasks.listTaskDependencies(deletedTask.id);
+    for (const edge of dependencies.blockedBy) {
+      if (deletedTaskIds.has(edge.blockerTaskId)) continue;
+      const survivor = store.tasks.getTask(edge.blockerTaskId);
+      if (!survivor) throw new Error(`Task not found: ${edge.blockerTaskId}`);
+      activity.push({
+        survivor,
+        body: `Blocks ${deletedTask.key} removed because ${deletedTask.key} was deleted`,
+      });
+    }
+    for (const edge of dependencies.blocks) {
+      if (deletedTaskIds.has(edge.dependentTaskId)) continue;
+      const survivor = store.tasks.getTask(edge.dependentTaskId);
+      if (!survivor) throw new Error(`Task not found: ${edge.dependentTaskId}`);
+      activity.push({
+        survivor,
+        body: `Blocked by ${deletedTask.key} removed because ${deletedTask.key} was deleted`,
+      });
+    }
+  }
+  return activity;
+}
+
+function writeDependencyDeletionActivity(
+  store: TasksApiStore,
+  activity: readonly DependencyDeletionActivity[],
+): void {
+  for (const event of activity) {
+    writeSystemComments(store, event.survivor.id, "Tasks", [event.body]);
+  }
 }
 
 function validateTaskParent(
@@ -703,22 +775,38 @@ export function registerHandlers(
     },
     async deleteProject(input) {
       try {
+        if (!store.tasks.getProject(input.projectId)) {
+          return { ok: true, deleted: false };
+        }
         if (!input.force && store.projectTaskCount(input.projectId) > 0) {
           fail(
             "project_not_empty",
             "A project must be empty before it can be deleted; pass force: true to delete its tasks",
           );
         }
-        const taskIds = store.tasks
-          .listTasks({ projectId: input.projectId })
-          .map((task) => task.id);
-        const attachments = attachmentsForTasks(store.tasks, taskIds);
-        const deleted = store.tasks.deleteProject(input.projectId);
-        if (deleted) {
+        const tasks = store.tasks.listTasks({ projectId: input.projectId });
+        const attachments = attachmentsForTasks(
+          store.tasks,
+          tasks.map((task) => task.id),
+        );
+        const result = store.transaction(() => {
+          const activity = dependencyDeletionActivity(store, tasks);
+          writeDependencyDeletionActivity(store, activity);
+          const deleted = store.tasks.deleteProject(input.projectId);
+          if (!deleted) {
+            throw new Error(`Project not found: ${input.projectId}`);
+          }
+          return {
+            deleted,
+            survivors: activity.map((event) => event.survivor),
+          };
+        });
+        if (result.deleted) {
           await removeAttachmentBlobs(bb, store.tasks, attachments);
+          publishDependencyChanges(bb, result.survivors);
           publishProjectsChanged(bb, input.projectId);
         }
-        return { ok: true, deleted };
+        return { ok: true, deleted: result.deleted };
       } catch (error) {
         if (error instanceof TasksDomainFailure) return projectFailure(error);
         throw error;
@@ -828,13 +916,122 @@ export function registerHandlers(
     },
     async deleteTask(input) {
       const task = store.tasks.getTask(input.taskId);
+      if (!task) return { deleted: false };
       const attachments = attachmentsForTasks(store.tasks, [input.taskId]);
-      const deleted = store.tasks.deleteTask(input.taskId);
-      if (deleted && task) {
-        await removeAttachmentBlobs(bb, store.tasks, attachments);
-        publishTasksChanged(bb, task.id, task.projectId);
+      const result = store.transaction(() => {
+        const activity = dependencyDeletionActivity(store, [task]);
+        writeDependencyDeletionActivity(store, activity);
+        const deleted = store.tasks.deleteTask(input.taskId);
+        if (!deleted) throw new Error(`Task not found: ${input.taskId}`);
+        return { deleted, survivors: activity.map((event) => event.survivor) };
+      });
+      await removeAttachmentBlobs(bb, store.tasks, attachments);
+      publishTasksChanged(bb, task.id, task.projectId);
+      publishDependencyChanges(bb, result.survivors);
+      return { deleted: result.deleted };
+    },
+    listTaskDependencies(input) {
+      const dependencies = store.tasks.listTaskDependencies(input.taskId);
+      return {
+        blockedBy: dependencies.blockedBy.map((edge) =>
+          dependencyTask(store, edge.blockerTaskId),
+        ),
+        blocks: dependencies.blocks.map((edge) =>
+          dependencyTask(store, edge.dependentTaskId),
+        ),
+      };
+    },
+    addTaskDependencies(input) {
+      try {
+        const dependent = store.tasks.getTask(input.dependentTaskId);
+        if (!dependent) {
+          throw new TaskDependencyError(
+            "dependency_endpoint_not_found",
+            `Dependent task not found: ${input.dependentTaskId}`,
+          );
+        }
+        const blockers = input.blockerTaskIds.map((taskId) => {
+          const blocker = store.tasks.getTask(taskId);
+          if (!blocker) {
+            throw new TaskDependencyError(
+              "dependency_endpoint_not_found",
+              `Blocker task not found: ${taskId}`,
+            );
+          }
+          return blocker;
+        });
+        const dependencies = store.transaction(() => {
+          const added = store.tasks.addTaskDependencies(
+            dependent.id,
+            blockers.map((blocker) => blocker.id),
+          );
+          for (const blocker of blockers) {
+            writeSystemComments(store, dependent.id, input.authorName, [
+              `Blocked by ${blocker.key} added by ${input.authorName}`,
+            ]);
+            writeSystemComments(store, blocker.id, input.authorName, [
+              `Blocks ${dependent.key} added by ${input.authorName}`,
+            ]);
+          }
+          return added;
+        });
+        publishDependencyChanges(bb, [dependent, ...blockers]);
+        return { ok: true, dependencies };
+      } catch (error) {
+        if (error instanceof TaskDependencyError) {
+          return {
+            ok: false,
+            error: { code: error.code, message: error.message },
+          };
+        }
+        throw error;
       }
-      return { deleted };
+    },
+    removeTaskDependencies(input) {
+      try {
+        const dependent = store.tasks.getTask(input.dependentTaskId);
+        if (!dependent) {
+          throw new TaskDependencyError(
+            "dependency_endpoint_not_found",
+            `Dependent task not found: ${input.dependentTaskId}`,
+          );
+        }
+        const blockers = input.blockerTaskIds.map((taskId) => {
+          const blocker = store.tasks.getTask(taskId);
+          if (!blocker) {
+            throw new TaskDependencyError(
+              "dependency_endpoint_not_found",
+              `Blocker task not found: ${taskId}`,
+            );
+          }
+          return blocker;
+        });
+        const dependencies = store.transaction(() => {
+          const removed = store.tasks.removeTaskDependencies(
+            dependent.id,
+            blockers.map((blocker) => blocker.id),
+          );
+          for (const blocker of blockers) {
+            writeSystemComments(store, dependent.id, input.authorName, [
+              `Blocked by ${blocker.key} removed by ${input.authorName}`,
+            ]);
+            writeSystemComments(store, blocker.id, input.authorName, [
+              `Blocks ${dependent.key} removed by ${input.authorName}`,
+            ]);
+          }
+          return removed;
+        });
+        publishDependencyChanges(bb, [dependent, ...blockers]);
+        return { ok: true, dependencies };
+      } catch (error) {
+        if (error instanceof TaskDependencyError) {
+          return {
+            ok: false,
+            error: { code: error.code, message: error.message },
+          };
+        }
+        throw error;
+      }
     },
     listTasks(input) {
       const page = store.tasks.listTasksPage({
