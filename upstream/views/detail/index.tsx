@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { SmilePlusIcon } from "@hugeicons/core-free-icons";
-import type { Task } from "../../shared/contract.js";
+import type { DependencyTask, Task } from "../../shared/contract.js";
 import { useBbNavigate } from "@bb/plugin-sdk/app";
 import {
   listAllTasks,
@@ -25,6 +25,11 @@ import {
   type TaskPropertyUpdate,
 } from "./rail.js";
 import { ThreadsSection } from "./threads.js";
+import {
+  dependencyMutationEndpoints,
+  type DependencyDirection,
+} from "./dependencies-model.js";
+import { DependenciesSection } from "./dependencies.js";
 import { DetailToasts, useDetailToasts } from "./toast.js";
 import { Icon } from "@bb/shared-ui/icon";
 import { cn } from "@bb/shared-ui/lib/utils";
@@ -209,19 +214,21 @@ function SubTasksSection({
       ) : null}
       {view === "list"
         ? subtasks.map((subtask) => (
-        <button
-          key={subtask.id}
-          type="button"
-          className="flex h-8 w-full items-center gap-2 border-b border-border-hairline px-0.5 text-left text-sm hover:bg-state-hover"
-          title={STATUS_LABELS[subtask.status]}
-          onClick={() => navigation.go({ kind: "task", taskKey: subtask.key })}
-        >
-          <StatusIcon status={subtask.status} />
-          <span className="shrink-0 text-xs text-muted-foreground">
-            {subtask.key}
-          </span>
-          <span className="min-w-0 truncate">{subtask.title}</span>
-        </button>
+            <button
+              key={subtask.id}
+              type="button"
+              className="flex h-8 w-full items-center gap-2 border-b border-border-hairline px-0.5 text-left text-sm hover:bg-state-hover"
+              title={STATUS_LABELS[subtask.status]}
+              onClick={() =>
+                navigation.go({ kind: "task", taskKey: subtask.key })
+              }
+            >
+              <StatusIcon status={subtask.status} />
+              <span className="shrink-0 text-xs text-muted-foreground">
+                {subtask.key}
+              </span>
+              <span className="min-w-0 truncate">{subtask.title}</span>
+            </button>
           ))
         : null}
       {adding ? (
@@ -280,6 +287,7 @@ function TaskDetail({ task }: { task: Task }) {
   // previous markdown, so passing the server value straight through would
   // reset the editor on every unrelated realtime refresh.
   const [draft, setDraft] = useState<{ taskId: string; markdown: string }>();
+  const [dependencyBusy, setDependencyBusy] = useState(false);
   const rpcRef = useRef(rpc);
   rpcRef.current = rpc;
   const pushRef = useRef(push);
@@ -304,6 +312,17 @@ function TaskDetail({ task }: { task: Task }) {
     ["projects:changed"],
   );
   const project = projects.data?.find((entry) => entry.id === task.projectId);
+  const dependencyCandidates = useTasksQuery(
+    async (query) =>
+      query.call("listTaskDependencyCandidates", { taskId: task.id }),
+    ["tasks:changed", "projects:changed"],
+    [task.id],
+  );
+  const dependencies = useTasksQuery(
+    async (query) => query.call("listTaskDependencies", { taskId: task.id }),
+    ["tasks:changed"],
+    [task.id],
+  );
 
   const parent = useTasksQuery(
     async (query) =>
@@ -430,6 +449,38 @@ function TaskDetail({ task }: { task: Task }) {
     }
   };
 
+  const mutateDependency = async (
+    action: "add" | "remove",
+    direction: DependencyDirection,
+    candidate: DependencyTask,
+  ) => {
+    if (dependencyBusy) return;
+    setDependencyBusy(true);
+    try {
+      const { dependentTaskId, blockerTaskIds } = dependencyMutationEndpoints(
+        task.id,
+        direction,
+        candidate.task.id,
+      );
+      const result =
+        action === "add"
+          ? await rpc.call("addTaskDependencies", {
+              dependentTaskId,
+              blockerTaskIds,
+            })
+          : await rpc.call("removeTaskDependencies", {
+              dependentTaskId,
+              blockerTaskIds,
+            });
+      if (!result.ok) push("error", result.error.message);
+      else dependencies.refresh();
+    } catch (error) {
+      push("error", error instanceof Error ? error.message : String(error));
+    } finally {
+      setDependencyBusy(false);
+    }
+  };
+
   const mentionItems = useMentionItems();
   const navigate = useBbNavigate();
 
@@ -545,6 +596,24 @@ function TaskDetail({ task }: { task: Task }) {
             task={task}
             subtasks={subtasks.data ?? []}
             onCreate={createSubtask}
+          />
+
+          <DependenciesSection
+            blockedBy={dependencies.data?.blockedBy ?? []}
+            blocks={dependencies.data?.blocks ?? []}
+            candidates={
+              dependencyCandidates.data ?? {
+                blockedBy: [],
+                blocks: [],
+              }
+            }
+            busy={dependencyBusy}
+            onAdd={(direction, candidate) =>
+              void mutateDependency("add", direction, candidate)
+            }
+            onRemove={(direction, candidate) =>
+              void mutateDependency("remove", direction, candidate)
+            }
           />
 
           {/* With no attached threads the section disappears entirely; the

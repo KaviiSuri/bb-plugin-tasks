@@ -126,6 +126,23 @@ export const taskSchema = z
   })
   .strict();
 
+export const taskDependencySchema = z
+  .object({
+    dependentTaskId: idSchema,
+    blockerTaskId: idSchema,
+    createdAt: z.string(),
+  })
+  .strict();
+
+export const dependencyTaskSchema = z
+  .object({
+    task: taskSchema,
+    project: projectSchema,
+  })
+  .strict();
+
+export const dependencyDirectionSchema = z.enum(["blockedBy", "blocks"]);
+
 export const labelSchema = z
   .object({
     id: idSchema,
@@ -256,6 +273,11 @@ export const tasksDomainErrorSchema = z
       "project_not_empty",
       "project_prefix_conflict",
       "attachment_referenced",
+      "dependency_self_link",
+      "dependency_duplicate",
+      "dependency_not_found",
+      "dependency_endpoint_not_found",
+      "dependency_cycle",
     ]),
     message: z.string(),
   })
@@ -263,6 +285,16 @@ export const tasksDomainErrorSchema = z
 
 const taskMutationResultSchema = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), task: taskSchema }).strict(),
+  z.object({ ok: z.literal(false), error: tasksDomainErrorSchema }).strict(),
+]);
+
+const dependencyMutationResultSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      ok: z.literal(true),
+      dependencies: z.array(taskDependencySchema),
+    })
+    .strict(),
   z.object({ ok: z.literal(false), error: tasksDomainErrorSchema }).strict(),
 ]);
 
@@ -509,6 +541,58 @@ export const tasksRpcContract = defineRpcContract({
   deleteTask: {
     input: z.object({ taskId: idSchema }).strict(),
     output: z.object({ deleted: z.boolean() }).strict(),
+  },
+  listTaskDependencies: {
+    input: z.object({ taskId: idSchema }).strict(),
+    output: z
+      .object({
+        blockedBy: z.array(dependencyTaskSchema),
+        blocks: z.array(dependencyTaskSchema),
+      })
+      .strict(),
+  },
+  listTaskDependencyCandidates: {
+    input: z.object({ taskId: idSchema }).strict(),
+    output: z
+      .object({
+        blockedBy: z.array(dependencyTaskSchema),
+        blocks: z.array(dependencyTaskSchema),
+      })
+      .strict(),
+  },
+  addTaskDependencies: {
+    input: z
+      .object({
+        dependentTaskId: idSchema,
+        blockerTaskIds: z
+          .array(idSchema)
+          .min(1)
+          .max(100)
+          .refine(
+            (ids) => new Set(ids).size === ids.length,
+            "must not contain duplicates",
+          ),
+        authorName: nonBlankStringSchema.default("You"),
+      })
+      .strict(),
+    output: dependencyMutationResultSchema,
+  },
+  removeTaskDependencies: {
+    input: z
+      .object({
+        dependentTaskId: idSchema,
+        blockerTaskIds: z
+          .array(idSchema)
+          .min(1)
+          .max(100)
+          .refine(
+            (ids) => new Set(ids).size === ids.length,
+            "must not contain duplicates",
+          ),
+        authorName: nonBlankStringSchema.default("You"),
+      })
+      .strict(),
+    output: dependencyMutationResultSchema,
   },
   /**
    * Stable keyset page in the requested database sort. `nextCursor` is opaque
@@ -782,6 +866,12 @@ export type TasksRpcContract = typeof tasksRpcContract;
 export type Folder = z.infer<typeof folderSchema>;
 export type Project = z.infer<typeof projectSchema>;
 export type Task = z.infer<typeof taskSchema>;
+export type TaskDependency = z.infer<typeof taskDependencySchema>;
+export type DependencyTask = z.infer<typeof dependencyTaskSchema>;
+export type DependencyDirection = z.infer<typeof dependencyDirectionSchema>;
+export type DependencyCandidates = z.infer<
+  (typeof tasksRpcContract)["listTaskDependencyCandidates"]["output"]
+>;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 export type Label = z.infer<typeof labelSchema>;

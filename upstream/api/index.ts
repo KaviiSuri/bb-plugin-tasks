@@ -1,6 +1,8 @@
 import type { BbPluginApi, PluginRpcHandlers } from "@bb/plugin-sdk";
 import {
   createTasksStore,
+  TaskDependencyError,
+  type TaskDependency as StoredTaskDependency,
   type Attachment as StoredAttachment,
   type Comment as StoredComment,
   type Task as StoredTask,
@@ -20,6 +22,7 @@ import {
   type SidebarProjectSummary,
   type Task,
   type TaskPullRequest,
+  type DependencyTask,
   type TasksChangedEvent,
   type TasksDomainError,
   type TaskStatus,
@@ -223,6 +226,94 @@ function apiTasks(store: TasksApiStore, tasks: StoredTask[]): Task[] {
     ...task,
     labelIds: labelsByTask.get(task.id) ?? [],
   }));
+}
+
+function dependencyTask(store: TasksApiStore, taskId: string): DependencyTask {
+  const task = store.tasks.getTask(taskId);
+  if (!task) throw new Error(`Task not found: ${taskId}`);
+  const project = store.tasks.getProject(task.projectId);
+  if (!project) throw new Error(`Project not found: ${task.projectId}`);
+  return { task: apiTask(store, task), project };
+}
+
+function publishDependencyChanges(
+  bb: BbPluginApi,
+  tasks: readonly StoredTask[],
+): void {
+  const seen = new Set<string>();
+  for (const task of tasks) {
+    if (seen.has(task.id)) continue;
+    seen.add(task.id);
+    publishTasksChanged(bb, task.id, task.projectId);
+    publishCommentsChanged(bb, task.id);
+  }
+}
+
+type DependencyMutationAction = "add" | "remove";
+
+function mutateTaskDependencies(
+  bb: BbPluginApi,
+  store: TasksApiStore,
+  action: DependencyMutationAction,
+  input: {
+    dependentTaskId: string;
+    blockerTaskIds: string[];
+    authorName: string;
+  },
+):
+  | { ok: true; dependencies: StoredTaskDependency[] }
+  | {
+      ok: false;
+      error: { code: TaskDependencyError["code"]; message: string };
+    } {
+  try {
+    const dependent = store.tasks.getTask(input.dependentTaskId);
+    if (!dependent) {
+      throw new TaskDependencyError(
+        "dependency_endpoint_not_found",
+        `Dependent task not found: ${input.dependentTaskId}`,
+      );
+    }
+    const blockers = input.blockerTaskIds.map((taskId) => {
+      const blocker = store.tasks.getTask(taskId);
+      if (!blocker) {
+        throw new TaskDependencyError(
+          "dependency_endpoint_not_found",
+          `Blocker task not found: ${taskId}`,
+        );
+      }
+      return blocker;
+    });
+    const pastTense = action === "add" ? "added" : "removed";
+    const dependencies = store.transaction(() => {
+      const changed =
+        action === "add"
+          ? store.tasks.addTaskDependencies(dependent.id, input.blockerTaskIds)
+          : store.tasks.removeTaskDependencies(
+              dependent.id,
+              input.blockerTaskIds,
+            );
+      for (const blocker of blockers) {
+        writeSystemComments(store, dependent.id, input.authorName, [
+          `Blocked by ${blocker.key} ${pastTense} by ${input.authorName}`,
+        ]);
+        writeSystemComments(store, blocker.id, input.authorName, [
+          `Blocks ${dependent.key} ${pastTense} by ${input.authorName}`,
+        ]);
+      }
+      return changed;
+    });
+    publishDependencyChanges(bb, [dependent, ...blockers]);
+    return { ok: true, dependencies };
+  } catch (error) {
+    if (error instanceof TaskDependencyError) {
+      return {
+        ok: false,
+        error: { code: error.code, message: error.message },
+      };
+    }
+    throw error;
+  }
 }
 
 function validateTaskParent(
@@ -835,6 +926,36 @@ export function registerHandlers(
         publishTasksChanged(bb, task.id, task.projectId);
       }
       return { deleted };
+    },
+    listTaskDependencies(input) {
+      const dependencies = store.tasks.listTaskDependencies(input.taskId);
+      return {
+        blockedBy: dependencies.blockedBy.map((edge) =>
+          dependencyTask(store, edge.blockerTaskId),
+        ),
+        blocks: dependencies.blocks.map((edge) =>
+          dependencyTask(store, edge.dependentTaskId),
+        ),
+      };
+    },
+    listTaskDependencyCandidates(input) {
+      const candidates = store.tasks.listTaskDependencyCandidateIds(
+        input.taskId,
+      );
+      return {
+        blockedBy: candidates.blockedBy.map((taskId) =>
+          dependencyTask(store, taskId),
+        ),
+        blocks: candidates.blocks.map((taskId) =>
+          dependencyTask(store, taskId),
+        ),
+      };
+    },
+    addTaskDependencies(input) {
+      return mutateTaskDependencies(bb, store, "add", input);
+    },
+    removeTaskDependencies(input) {
+      return mutateTaskDependencies(bb, store, "remove", input);
     },
     listTasks(input) {
       const page = store.tasks.listTasksPage({

@@ -88,6 +88,29 @@ export interface TaskLabel {
   labelId: string;
 }
 
+export interface TaskDependency {
+  dependentTaskId: string;
+  blockerTaskId: string;
+  createdAt: string;
+}
+
+export type TaskDependencyErrorCode =
+  | "dependency_self_link"
+  | "dependency_duplicate"
+  | "dependency_not_found"
+  | "dependency_endpoint_not_found"
+  | "dependency_cycle";
+
+export class TaskDependencyError extends Error {
+  constructor(
+    readonly code: TaskDependencyErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "TaskDependencyError";
+  }
+}
+
 export interface Comment {
   id: string;
   taskId: string;

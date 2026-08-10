@@ -7,10 +7,7 @@ import type {
   TaskStatus,
   TaskThread,
 } from "../../shared/contract.js";
-import {
-  TASK_PRIORITIES,
-  TASK_STATUSES,
-} from "../../shared/contract.js";
+import { TASK_PRIORITIES, TASK_STATUSES } from "../../shared/contract.js";
 import type { Preset } from "../../shared/contract.js";
 import { useTasksQuery, useTasksRpc } from "../../shell/data.js";
 import {
@@ -46,11 +43,7 @@ import {
   CommandItem,
   CommandList,
 } from "@bb/shared-ui/command";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@bb/shared-ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@bb/shared-ui/popover";
 import { Icon } from "@bb/shared-ui/icon";
 import { cn } from "@bb/shared-ui/lib/utils";
 
@@ -68,6 +61,8 @@ export interface TaskPropertiesProps {
   threads: TaskThread[];
   onUpdate: (update: TaskPropertyUpdate) => void;
 }
+
+export type TaskRailProps = TaskPropertiesProps;
 
 function localIsoDate(daysFromNow: number): string {
   const date = new Date();
@@ -109,10 +104,7 @@ function StatusMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         {TASK_STATUSES.map((status) => (
-          <DropdownMenuItem
-            key={status}
-            onSelect={() => onUpdate({ status })}
-          >
+          <DropdownMenuItem key={status} onSelect={() => onUpdate({ status })}>
             <StatusIcon status={status} />
             {STATUS_LABELS[status]}
             {status === task.status ? (
@@ -464,7 +456,7 @@ export function PropertiesRail({
   onUpdate,
   onError,
   className,
-}: TaskPropertiesProps & {
+}: TaskRailProps & {
   presets: Preset[] | undefined;
   onError: (message: string) => void;
   className?: string;
@@ -484,13 +476,21 @@ export function PropertiesRail({
       <h2 className="mb-1.5 text-xs font-semibold text-muted-foreground">
         Properties
       </h2>
-      <StatusMenu task={task} onUpdate={onUpdate} triggerClassName={RAIL_ROW_CLASS} />
+      <StatusMenu
+        task={task}
+        onUpdate={onUpdate}
+        triggerClassName={RAIL_ROW_CLASS}
+      />
       <PriorityMenu
         task={task}
         onUpdate={onUpdate}
         triggerClassName={RAIL_ROW_CLASS}
       />
-      <DueDateMenu task={task} onUpdate={onUpdate} triggerClassName={RAIL_ROW_CLASS} />
+      <DueDateMenu
+        task={task}
+        onUpdate={onUpdate}
+        triggerClassName={RAIL_ROW_CLASS}
+      />
 
       <div className="mb-1 mt-3 text-2xs font-semibold text-muted-foreground">
         Labels
@@ -597,9 +597,21 @@ export function InlineProperties({
   );
   return (
     <div className={cn("flex flex-wrap items-center gap-1.5", className)}>
-      <StatusMenu task={task} onUpdate={onUpdate} triggerClassName={CHIP_CLASS} />
-      <PriorityMenu task={task} onUpdate={onUpdate} triggerClassName={CHIP_CLASS} />
-      <DueDateMenu task={task} onUpdate={onUpdate} triggerClassName={CHIP_CLASS} />
+      <StatusMenu
+        task={task}
+        onUpdate={onUpdate}
+        triggerClassName={CHIP_CLASS}
+      />
+      <PriorityMenu
+        task={task}
+        onUpdate={onUpdate}
+        triggerClassName={CHIP_CLASS}
+      />
+      <DueDateMenu
+        task={task}
+        onUpdate={onUpdate}
+        triggerClassName={CHIP_CLASS}
+      />
       {taskLabels.map((label) => (
         <LabelChip key={label.id} label={label} />
       ))}
