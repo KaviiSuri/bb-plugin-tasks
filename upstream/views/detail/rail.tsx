@@ -539,6 +539,8 @@ export function PropertiesRail({
       <div className="mt-2.5 py-0.5">
         <DispatchControl
           taskId={task.id}
+          taskKey={task.key}
+          isBlocked={task.isBlocked}
           presets={presets}
           onError={onError}
           align="start"
@@ -626,6 +628,8 @@ export function InlineProperties({
       </LabelsMenu>
       <DispatchControl
         taskId={task.id}
+        taskKey={task.key}
+        isBlocked={task.isBlocked}
         presets={presets}
         onError={onError}
         className="ml-auto max-w-56"

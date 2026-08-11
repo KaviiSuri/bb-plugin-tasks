@@ -13,6 +13,7 @@ export interface ParsedArgs {
 
 const VALUELESS_FLAGS = new Set([
   "active",
+  "allow-blocked",
   "help",
   "json",
   "no-due",

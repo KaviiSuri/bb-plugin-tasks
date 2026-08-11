@@ -1762,6 +1762,164 @@ describe("bb tasks CLI", () => {
     await harness.dispose();
   });
 
+  it("requires --allow-blocked for dispatch and attachment while leaving routine updates unchanged", async () => {
+    let spawnCount = 0;
+    const { bb, harness } = createFakePluginHost({
+      pluginId: "tasks",
+      sdk: {
+        threads: {
+          spawn: async () => ({ id: `thr_cli_blocked_${++spawnCount}` }),
+          get: async ({ threadId }) =>
+            makeThreadResponse({ id: threadId, status: "starting" }),
+        },
+      },
+    });
+    await plugin(bb);
+    stdout(
+      await harness.runCli([
+        "project",
+        "create",
+        "--name",
+        "Blocked CLI",
+        "--prefix",
+        "BCLI",
+        "--link-bb-project",
+        "proj_bb",
+      ]),
+    );
+    const blocker = JSON.parse(
+      stdout(
+        await harness.runCli([
+          "create",
+          "--project",
+          "BCLI",
+          "--title",
+          "Direct blocker",
+          "--json",
+        ]),
+      ),
+    ).task;
+    const task = JSON.parse(
+      stdout(
+        await harness.runCli([
+          "create",
+          "--project",
+          "BCLI",
+          "--title",
+          "Blocked work",
+          "--json",
+        ]),
+      ),
+    ).task;
+    stdout(
+      await harness.runCli([
+        "dependency",
+        "add",
+        task.key,
+        "--blocked-by",
+        blocker.key,
+      ]),
+    );
+    stdout(
+      await harness.runCli([
+        "preset",
+        "create",
+        "--name",
+        "Blocked worker",
+        "--provider",
+        "codex",
+        "--model",
+        "gpt-5.6-sol",
+        "--reasoning",
+        "high",
+        "--permission",
+        "full",
+      ]),
+    );
+
+    await expect(
+      harness.runCli(["dispatch", task.key, "--preset", "Blocked worker"]),
+    ).resolves.toEqual({
+      exitCode: 1,
+      stdout: "",
+      stderr: `Task ${task.key} is blocked by unresolved task ${blocker.key}`,
+    });
+    expect(harness.sdk.callsTo("threads.spawn")).toEqual([]);
+
+    expect(
+      stdout(
+        await harness.runCli([
+          "dispatch",
+          task.key,
+          "--preset",
+          "Blocked worker",
+          "--allow-blocked",
+        ]),
+      ),
+    ).toBe("thr_cli_blocked_1");
+
+    const attachTask = JSON.parse(
+      stdout(
+        await harness.runCli([
+          "create",
+          "--project",
+          "BCLI",
+          "--title",
+          "Blocked attachment",
+          "--json",
+        ]),
+      ),
+    ).task;
+    stdout(
+      await harness.runCli([
+        "dependency",
+        "add",
+        attachTask.key,
+        "--blocked-by",
+        blocker.key,
+      ]),
+    );
+    await expect(
+      harness.runCli([
+        "attach",
+        attachTask.key,
+        "--thread",
+        "thr_manual_blocked",
+      ]),
+    ).resolves.toMatchObject({
+      exitCode: 1,
+      stderr: `Task ${attachTask.key} is blocked by unresolved task ${blocker.key}`,
+    });
+    expect(
+      stdout(
+        await harness.runCli([
+          "attach",
+          attachTask.key,
+          "--thread",
+          "thr_manual_blocked",
+          "--allow-blocked",
+        ]),
+      ),
+    ).toBe(`Attached thr_manual_blocked to ${attachTask.key}`);
+
+    // Generic status editing is deliberately not intercepted by this guard.
+    expect(
+      JSON.parse(
+        stdout(
+          await harness.runCli([
+            "update",
+            attachTask.key,
+            "--status",
+            "in_progress",
+            "--json",
+          ]),
+        ),
+      ).task.status,
+    ).toBe("in_progress");
+
+    await harness.dispose();
+  });
+
   it("returns a friendly dispatch error when the task project is not linked", async () => {
     const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
     await plugin(bb);

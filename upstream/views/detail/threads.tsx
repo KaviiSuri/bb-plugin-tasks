@@ -12,10 +12,7 @@ import {
   formatRelativeTime,
   isActiveThread,
 } from "./meta.js";
-import {
-  PresetDialog,
-  savePresetDraft,
-} from "../manage/preset-dialog.js";
+import { PresetDialog, savePresetDraft } from "../manage/preset-dialog.js";
 import { useTasksRpc } from "../../shell/data.js";
 import { Button } from "@bb/shared-ui/button";
 import {
@@ -27,6 +24,8 @@ import {
 } from "@bb/shared-ui/dropdown-menu";
 import { Icon } from "@bb/shared-ui/icon";
 import { cn } from "@bb/shared-ui/lib/utils";
+import { unresolvedBlockerKeys } from "../../shared/blocking.js";
+import { BlockedWorkWarningDialog } from "../blocking/warning-dialog.js";
 
 /**
  * PR pill on a thread card: a real link to GitHub when the thread's
@@ -53,8 +52,8 @@ function ThreadPullRequestPill({
         // color, the text stays the normal foreground.
         className="flex shrink-0 items-center gap-1 rounded-full border border-border bg-secondary px-2 py-0.5 text-xs font-medium shadow-2xs hover:border-input"
       >
-        <Icon name={meta.icon} className={cn("size-3", meta.textClassName)} />
-        #{pullRequest.number}
+        <Icon name={meta.icon} className={cn("size-3", meta.textClassName)} />#
+        {pullRequest.number}
       </a>
     );
   }
@@ -138,6 +137,8 @@ function storeLastPresetId(presetId: string): void {
 
 export interface DispatchControlProps {
   taskId: string;
+  taskKey: string;
+  isBlocked: boolean;
   presets: Preset[] | undefined;
   onError: (message: string) => void;
   align?: "start" | "end";
@@ -157,6 +158,8 @@ export interface DispatchControlProps {
  */
 export function DispatchControl({
   taskId,
+  taskKey,
+  isBlocked,
   presets,
   onError,
   align = "end",
@@ -166,24 +169,66 @@ export function DispatchControl({
   const tasksRpc = useTasksRpc();
   const [dispatching, setDispatching] = useState(false);
   const [lastPresetId, setLastPresetId] = useState(loadLastPresetId);
+  const [blockedDispatch, setBlockedDispatch] = useState<{
+    presetId: string;
+    blockerKeys: string[];
+  } | null>(null);
   // Keyed remount resets the create dialog's draft per open.
   const [createDialogKey, setCreateDialogKey] = useState<number | null>(null);
 
-  const dispatch = async (presetId: string) => {
+  const dispatch = async (presetId: string, allowBlocked: boolean) => {
     setDispatching(true);
     try {
-      await rpc.call("delegate", { taskId, presetId });
+      await rpc.call("delegate", { taskId, presetId, allowBlocked });
     } catch (error) {
+      if (!allowBlocked) {
+        try {
+          const dependencies = await tasksRpc.call("listTaskDependencies", {
+            taskId,
+          });
+          const blockerKeys = unresolvedBlockerKeys(dependencies.blockedBy);
+          if (blockerKeys.length > 0) {
+            setBlockedDispatch({ presetId, blockerKeys });
+            return;
+          }
+        } catch {
+          // Surface the original dispatch failure below.
+        }
+      }
       onError(error instanceof Error ? error.message : String(error));
     } finally {
       setDispatching(false);
     }
   };
 
+  const requestDispatch = async (presetId: string) => {
+    if (!isBlocked) {
+      await dispatch(presetId, false);
+      return;
+    }
+    setDispatching(true);
+    try {
+      const dependencies = await tasksRpc.call("listTaskDependencies", {
+        taskId,
+      });
+      const blockerKeys = unresolvedBlockerKeys(dependencies.blockedBy);
+      if (blockerKeys.length > 0) {
+        setBlockedDispatch({ presetId, blockerKeys });
+        return;
+      }
+    } catch (error) {
+      onError(error instanceof Error ? error.message : String(error));
+      return;
+    } finally {
+      setDispatching(false);
+    }
+    await dispatch(presetId, false);
+  };
+
   const pickPreset = (preset: Preset) => {
     setLastPresetId(preset.id);
     storeLastPresetId(preset.id);
-    void dispatch(preset.id);
+    void requestDispatch(preset.id);
   };
 
   // bg-primary (not the default bg-foreground): custom palettes like Nord
@@ -226,6 +271,20 @@ export function DispatchControl({
 
   return (
     <>
+      <BlockedWorkWarningDialog
+        open={blockedDispatch !== null}
+        taskKey={taskKey}
+        blockerKeys={blockedDispatch?.blockerKeys ?? []}
+        onOpenChange={(open) => {
+          if (!open) setBlockedDispatch(null);
+        }}
+        onContinue={() => {
+          if (!blockedDispatch) return;
+          const { presetId } = blockedDispatch;
+          setBlockedDispatch(null);
+          void dispatch(presetId, true);
+        }}
+      />
       <div className={cn("flex min-w-0", className)}>
         <Button
           size="sm"
@@ -239,9 +298,7 @@ export function DispatchControl({
           }}
         >
           <span className="truncate">
-            {dispatching
-              ? "Dispatching…"
-              : (current?.name ?? "Dispatch")}
+            {dispatching ? "Dispatching…" : (current?.name ?? "Dispatch")}
           </span>
         </Button>
         <DropdownMenu>

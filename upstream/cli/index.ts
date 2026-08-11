@@ -121,9 +121,9 @@ const PRESET_HELP = `Usage:
   bb tasks preset update <name-or-id> [--name <name>] [--provider <id>] [--model <id>] [--reasoning <level>] [--permission <accept-edits|auto|full>] [--environment project-default|worktree] [--base-branch <branch>] [--machine <id-or-name>] [--instructions <text>] [--json]
   bb tasks preset delete <name-or-id> [--json]`;
 const DISPATCH_HELP =
-  "Usage: bb tasks dispatch <key> --preset <name> [--instructions <extra>] [--json]";
+  "Usage: bb tasks dispatch <key> --preset <name> [--instructions <extra>] [--allow-blocked] [--json]";
 const ATTACH_HELP =
-  "Usage: bb tasks attach <key> [--thread <thread-id>] [--json]";
+  "Usage: bb tasks attach <key> [--thread <thread-id>] [--allow-blocked] [--json]";
 const THREADS_HELP = "Usage: bb tasks threads <key> [--json]";
 
 interface PluginStatus {
@@ -1155,12 +1155,14 @@ async function runShow(domain: TasksDomain, argv: string[]): Promise<string> {
     )}`,
     `Blocked by\n${table(
       ["KEY", "PROJECT", "STATUS", "TITLE"],
-      dependencies.blockedBy.map(({ task: related, project: relatedProject }) => [
-        related.key,
-        relatedProject.name,
-        related.status,
-        related.title,
-      ]),
+      dependencies.blockedBy.map(
+        ({ task: related, project: relatedProject }) => [
+          related.key,
+          relatedProject.name,
+          related.status,
+          related.title,
+        ],
+      ),
       "(none)",
     )}`,
     `Blocks\n${table(
@@ -1876,7 +1878,7 @@ async function runDispatch(
 ): Promise<string> {
   const args = parseArgs(argv);
   if (args.flags.has("help")) return DISPATCH_HELP;
-  assertAllowed(args, ["preset", "instructions"]);
+  assertAllowed(args, ["preset", "instructions"], ["allow-blocked"]);
   const [address] = requirePositionals(args, 1, DISPATCH_HELP);
   const task = await resolveTask(domain, address!);
   const preset = resolvePreset(
@@ -1889,6 +1891,7 @@ async function runDispatch(
         taskId: task.id,
         presetId: preset.id,
         extraInstructions: option(args, "instructions"),
+        allowBlocked: args.flags.has("allow-blocked"),
       }),
     ),
   );
@@ -1906,7 +1909,7 @@ async function runAttach(
 ): Promise<string> {
   const args = parseArgs(argv);
   if (args.flags.has("help")) return ATTACH_HELP;
-  assertAllowed(args, ["thread"]);
+  assertAllowed(args, ["thread"], ["allow-blocked"]);
   const [address] = requirePositionals(args, 1, ATTACH_HELP);
   const task = await resolveTask(domain, address!);
   const threadId =
@@ -1919,6 +1922,7 @@ async function runAttach(
       delegationRpcContract.taskThreadsAttach.input.parse({
         taskId: task.id,
         threadId,
+        allowBlocked: args.flags.has("allow-blocked"),
       }),
     ),
   );

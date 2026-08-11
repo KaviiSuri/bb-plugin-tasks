@@ -40,6 +40,8 @@ import {
 } from "../list/list-preference.js";
 import { BlockingFilterChip } from "../list/filter-bar.js";
 import { BlockedBadge } from "../blocking/badge.js";
+import { unresolvedBlockerKeys } from "../../shared/blocking.js";
+import { BlockedWorkWarningDialog } from "../blocking/warning-dialog.js";
 
 const DRAG_THRESHOLD_PX = 5;
 
@@ -169,6 +171,14 @@ function groupColumns(tasks: readonly Task[]): ColumnMap {
   };
   for (const task of tasks) columns[task.status].push(task);
   return columns;
+}
+
+interface PendingBlockedMove {
+  taskId: string;
+  taskKey: string;
+  blockerKeys: string[];
+  toStatus: TaskStatus;
+  dropIndex: number;
 }
 
 interface DragState {
@@ -359,6 +369,8 @@ export function BoardView({ projectId, parentTaskId }: BoardViewProps) {
   columnsRef.current = columns;
 
   const [drag, setDrag] = useState<DragState | null>(null);
+  const [pendingBlockedMove, setPendingBlockedMove] =
+    useState<PendingBlockedMove | null>(null);
   const [quickAddStatus, setQuickAddStatus] = useState<TaskStatus | null>(null);
   const boardRef = useRef<HTMLDivElement | null>(null);
   const columnRefs = useRef(new Map<TaskStatus, HTMLDivElement>());
@@ -433,6 +445,40 @@ export function BoardView({ projectId, parentTaskId }: BoardViewProps) {
       );
   };
 
+  const requestDrop = async (
+    task: Task,
+    toStatus: TaskStatus,
+    dropIndex: number,
+  ) => {
+    if (
+      toStatus !== "in_progress" ||
+      task.status === "in_progress" ||
+      !task.isBlocked
+    ) {
+      commitDrop(task.id, toStatus, dropIndex);
+      return;
+    }
+    try {
+      const dependencies = await rpc.call("listTaskDependencies", {
+        taskId: task.id,
+      });
+      const blockerKeys = unresolvedBlockerKeys(dependencies.blockedBy);
+      if (blockerKeys.length === 0) {
+        commitDrop(task.id, toStatus, dropIndex);
+        return;
+      }
+      setPendingBlockedMove({
+        taskId: task.id,
+        taskKey: task.key,
+        blockerKeys,
+        toStatus,
+        dropIndex,
+      });
+    } catch {
+      board.refresh();
+    }
+  };
+
   const handleCardPointerDown = (
     event: ReactPointerEvent<HTMLDivElement>,
     task: Task,
@@ -488,7 +534,7 @@ export function BoardView({ projectId, parentTaskId }: BoardViewProps) {
           upEvent.clientY,
           task.id,
         );
-        if (target) commitDrop(task.id, target.status, target.index);
+        if (target) void requestDrop(task, target.status, target.index);
       }
       setDrag(null);
       // The click event fires right after pointerup; swallow that one only.
@@ -641,24 +687,41 @@ export function BoardView({ projectId, parentTaskId }: BoardViewProps) {
           drag !== null && "cursor-grabbing",
         )}
       >
-      {visibleBoardStatuses(columns).map(renderColumn)}
-      {drag && ghostTask ? (
-        <div
-          className="pointer-events-none fixed z-50"
-          style={{
-            left: drag.x - drag.offsetX,
-            top: drag.y - drag.offsetY,
-            width: drag.width,
+        {visibleBoardStatuses(columns).map(renderColumn)}
+        {drag && ghostTask ? (
+          <div
+            className="pointer-events-none fixed z-50"
+            style={{
+              left: drag.x - drag.offsetX,
+              top: drag.y - drag.offsetY,
+              width: drag.width,
+            }}
+          >
+            <TaskCard
+              task={ghostTask}
+              labelsById={labelsById}
+              meta={metaByTaskId.get(ghostTask.id) ?? EMPTY_META}
+              ghost
+            />
+          </div>
+        ) : null}
+        <BlockedWorkWarningDialog
+          open={pendingBlockedMove !== null}
+          taskKey={pendingBlockedMove?.taskKey ?? "This task"}
+          blockerKeys={pendingBlockedMove?.blockerKeys ?? []}
+          onOpenChange={(open) => {
+            if (!open) setPendingBlockedMove(null);
           }}
-        >
-          <TaskCard
-            task={ghostTask}
-            labelsById={labelsById}
-            meta={metaByTaskId.get(ghostTask.id) ?? EMPTY_META}
-            ghost
-          />
-        </div>
-      ) : null}
+          onContinue={() => {
+            if (!pendingBlockedMove) return;
+            commitDrop(
+              pendingBlockedMove.taskId,
+              pendingBlockedMove.toStatus,
+              pendingBlockedMove.dropIndex,
+            );
+            setPendingBlockedMove(null);
+          }}
+        />
         <NewTaskDialog
           open={quickAddStatus !== null}
           onOpenChange={(open) => {
