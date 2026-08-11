@@ -81,7 +81,11 @@ const cycleProducing = {
   project,
 };
 
-function rpc(mutations: Array<{ method: string; input: unknown }>) {
+function rpc(
+  mutations: Array<{ method: string; input: unknown }>,
+  reads?: Map<string, number>,
+) {
+  const read = (name: string) => reads?.set(name, (reads.get(name) ?? 0) + 1);
   return {
     listProjects: () => ({ projects: [project, otherProject] }),
     listFolders: () => ({ folders: [] }),
@@ -92,7 +96,10 @@ function rpc(mutations: Array<{ method: string; input: unknown }>) {
         ? []
         : [task, related.task, eligible.task, cycleProducing.task],
     }),
-    getTaskByKey: () => ({ task }),
+    getTaskByKey: () => {
+      read("detail");
+      return { task };
+    },
     listLabels: () => ({ labels: [] }),
     listAttachments: () => ({ attachments: [] }),
     listTaskThreads: () => ({ taskThreads: [] }),
@@ -100,9 +107,15 @@ function rpc(mutations: Array<{ method: string; input: unknown }>) {
       pullRequests: [],
       unavailableThreadIds: [],
     }),
-    listComments: () => ({ comments: [] }),
+    listComments: () => {
+      read("activity");
+      return { comments: [] };
+    },
     listBbProjects: () => ({ bbProjects: [] }),
-    listTaskDependencies: () => ({ blockedBy: [related], blocks: [] }),
+    listTaskDependencies: () => {
+      read("dependencies");
+      return { blockedBy: [related], blocks: [] };
+    },
     // Server-authorized picker candidates deliberately omit cycleProducing.
     listTaskDependencyCandidates: () => ({ blockedBy: [eligible], blocks: [] }),
     addTaskDependencies: (input: unknown) => {
@@ -128,6 +141,34 @@ describe("task detail dependencies", () => {
     const section = await slot.findByRole("region", { name: "Dependencies" });
     await waitFor(() => expect(document.activeElement).toBe(section));
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "center" });
+  });
+
+  it("refreshes detail, dependencies, and activity from dependency realtime signals", async () => {
+    const reads = new Map<string, number>();
+    const slot = renderSlot(
+      app.navPanels[0]!,
+      { subPath: "task/ONE-1" },
+      { rpc: rpc([], reads) },
+    );
+    await slot.findByRole("region", { name: "Dependencies" });
+    await slot.findByText("Activity");
+    const before = new Map(reads);
+
+    await slot.emitRealtime("tasks:changed", {
+      taskId: task.id,
+      projectId: PROJECT_ID,
+    });
+    await slot.emitRealtime("comments:changed", { taskId: task.id });
+
+    await waitFor(() => {
+      expect(reads.get("detail")).toBeGreaterThan(before.get("detail") ?? 0);
+      expect(reads.get("dependencies")).toBeGreaterThan(
+        before.get("dependencies") ?? 0,
+      );
+      expect(reads.get("activity")).toBeGreaterThan(
+        before.get("activity") ?? 0,
+      );
+    });
   });
 
   it("mounts the responsive authoritative section, presents context, filters cycles, mutates, and navigates", async () => {

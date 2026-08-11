@@ -1,7 +1,9 @@
 import {
+  forwardRef,
   useEffect,
   useRef,
   useState,
+  type HTMLAttributes,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
@@ -215,7 +217,10 @@ function WorkingAgentsChip({ threads }: { threads: TaskThread[] }) {
   );
 }
 
-interface TaskCardProps {
+interface TaskCardProps extends Omit<
+  HTMLAttributes<HTMLDivElement>,
+  "children" | "onClick" | "onPointerDown"
+> {
   task: Task;
   labelsById: Map<string, Label>;
   meta: BoardCardMeta;
@@ -227,78 +232,91 @@ interface TaskCardProps {
   contextMenuButton?: ReactNode;
 }
 
-export function TaskCard({
-  task,
-  labelsById,
-  meta,
-  ghost = false,
-  dragging = false,
-  cardRef,
-  onPointerDown,
-  onClick,
-  contextMenuButton,
-}: TaskCardProps) {
-  const labels = task.labelIds
-    .map((labelId) => labelsById.get(labelId))
-    .filter((label): label is Label => label !== undefined);
-  return (
-    <div
-      ref={cardRef}
-      data-task-key={task.key}
-      data-task-context-trigger
-      onPointerDown={onPointerDown}
-      onClick={onClick}
-      className={cn(
-        "relative shrink-0 rounded-lg border border-border bg-card px-2.5 py-2 shadow-2xs select-none",
-        ghost
-          ? "rotate-2 shadow-md"
-          : "cursor-pointer touch-none hover:border-input",
-        dragging && "opacity-40",
-      )}
-    >
-      <div className="flex items-center gap-1.5 pr-6 text-2xs text-muted-foreground">
-        <span className="tabular-nums">{task.key}</span>
-        <BlockedBadge task={task} compact />
-        <WorkingAgentsChip threads={meta.workingThreads} />
-      </div>
-      {contextMenuButton ? (
-        <span className="absolute right-1 top-1">{contextMenuButton}</span>
-      ) : null}
-      <div className="mt-1 line-clamp-2 text-sm leading-snug font-medium">
-        {task.title}
-      </div>
-      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-        <PriorityIcon priority={task.priority} />
-        {labels.map((label) => (
-          <span
-            key={label.id}
-            className="flex items-center gap-1 rounded-md border border-border px-1.5 text-2xs text-muted-foreground"
-          >
+export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
+  function TaskCard(
+    {
+      task,
+      labelsById,
+      meta,
+      ghost = false,
+      dragging = false,
+      cardRef,
+      onPointerDown,
+      onClick,
+      contextMenuButton,
+      className,
+      ...triggerProps
+    },
+    forwardedRef,
+  ) {
+    const labels = task.labelIds
+      .map((labelId) => labelsById.get(labelId))
+      .filter((label): label is Label => label !== undefined);
+    return (
+      <div
+        {...triggerProps}
+        ref={(element) => {
+          cardRef?.(element);
+          if (typeof forwardedRef === "function") forwardedRef(element);
+          else if (forwardedRef) forwardedRef.current = element;
+        }}
+        data-task-key={task.key}
+        data-task-context-trigger
+        onPointerDown={onPointerDown}
+        onClick={onClick}
+        className={cn(
+          "relative shrink-0 rounded-lg border border-border bg-card px-2.5 py-2 shadow-2xs select-none",
+          ghost
+            ? "rotate-2 shadow-md"
+            : "cursor-pointer touch-none hover:border-input",
+          dragging && "opacity-40",
+          className,
+        )}
+      >
+        <div className="flex items-center gap-1.5 pr-6 text-2xs text-muted-foreground">
+          <span className="tabular-nums">{task.key}</span>
+          <BlockedBadge task={task} compact />
+          <WorkingAgentsChip threads={meta.workingThreads} />
+        </div>
+        {contextMenuButton ? (
+          <span className="absolute right-1 top-1">{contextMenuButton}</span>
+        ) : null}
+        <div className="mt-1 line-clamp-2 text-sm leading-snug font-medium">
+          {task.title}
+        </div>
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          <PriorityIcon priority={task.priority} />
+          {labels.map((label) => (
             <span
-              aria-hidden
-              className="size-1.5 rounded-full"
-              style={{ backgroundColor: label.color }}
+              key={label.id}
+              className="flex items-center gap-1 rounded-md border border-border px-1.5 text-2xs text-muted-foreground"
+            >
+              <span
+                aria-hidden
+                className="size-1.5 rounded-full"
+                style={{ backgroundColor: label.color }}
+              />
+              {label.name}
+            </span>
+          ))}
+          {meta.subTotal > 0 ? (
+            <span className="flex items-center gap-0.5 text-2xs text-muted-foreground">
+              <Icon name="GitBranch" className="size-3" />
+              {meta.subDone}/{meta.subTotal}
+            </span>
+          ) : null}
+          {meta.attachmentCount > 0 ? (
+            <Icon
+              name="Paperclip"
+              className="size-3 text-muted-foreground"
+              aria-label={`${meta.attachmentCount} attachments`}
             />
-            {label.name}
-          </span>
-        ))}
-        {meta.subTotal > 0 ? (
-          <span className="flex items-center gap-0.5 text-2xs text-muted-foreground">
-            <Icon name="GitBranch" className="size-3" />
-            {meta.subDone}/{meta.subTotal}
-          </span>
-        ) : null}
-        {meta.attachmentCount > 0 ? (
-          <Icon
-            name="Paperclip"
-            className="size-3 text-muted-foreground"
-            aria-label={`${meta.attachmentCount} attachments`}
-          />
-        ) : null}
+          ) : null}
+        </div>
       </div>
-    </div>
-  );
-}
+    );
+  },
+);
 
 function BoardSkeleton() {
   return (

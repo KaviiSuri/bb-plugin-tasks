@@ -48,29 +48,50 @@ const task = {
   isBlocked: false,
   unresolvedBlockerCount: 0,
 };
+const project = {
+  id: PROJECT_ID,
+  name: "Tasks",
+  prefix: "TSK",
+  nextTaskNumber: 4,
+  color: "blue",
+  folderId: null,
+  linkedBbProjectId: null,
+  createdAt: "2026-07-15T00:00:00.000Z",
+};
+const otherProject = {
+  ...project,
+  id: "01HZZZZZZZZZZZZZZZZZZZZZP2",
+  name: "External",
+  prefix: "EXT",
+  color: "purple",
+};
 const candidate = {
   task: {
     ...task,
     id: "01HZZZZZZZZZZZZZZZZZZZZZT2",
+    projectId: otherProject.id,
     number: 2,
-    key: "TSK-2",
-    title: "Eligible blocker",
+    key: "EXT-2",
+    title: "Eligible cross-project blocker",
   },
-  project: {
-    id: PROJECT_ID,
-    name: "Tasks",
-    prefix: "TSK",
-    nextTaskNumber: 3,
-    color: "blue",
-    folderId: null,
-    linkedBbProjectId: null,
-    createdAt: "2026-07-15T00:00:00.000Z",
-  },
+  project: otherProject,
+};
+const existing = {
+  ...task,
+  id: "01HZZZZZZZZZZZZZZZZZZZZZT3",
+  key: "TSK-3",
+  title: "Existing blocker",
+};
+const cycleProducing = {
+  ...task,
+  id: "01HZZZZZZZZZZZZZZZZZZZZZT4",
+  key: "TSK-4",
+  title: "Cycle-producing blocker",
 };
 
 function rpc(calls: Array<{ method: string; input: unknown }>) {
   return {
-    listProjects: () => ({ projects: [candidate.project] }),
+    listProjects: () => ({ projects: [project, otherProject] }),
     listFolders: () => ({ folders: [] }),
     listPresets: () => ({ presets: [] }),
     sidebarSummary: () => ({ projects: [] }),
@@ -81,9 +102,22 @@ function rpc(calls: Array<{ method: string; input: unknown }>) {
     listLabels: () => ({ labels: [] }),
     listTaskThreads: () => ({ taskThreads: [] }),
     listAttachments: () => ({ attachments: [] }),
-    searchBlockerCandidates: (input: unknown) => {
+    searchBlockerCandidates: (input: { dependentTaskId?: string | null }) => {
       calls.push({ method: "candidates", input });
-      return { candidates: [candidate], selected: [] };
+      // Mirror the canonical endpoint's authorization boundary: self plus
+      // existing and cycle-producing edges never reach the reused picker.
+      const excluded = new Set([
+        input.dependentTaskId,
+        existing.id,
+        cycleProducing.id,
+      ]);
+      const candidates = [
+        { task, project },
+        { task: existing, project },
+        { task: cycleProducing, project },
+        candidate,
+      ].filter((entry) => !excluded.has(entry.task.id));
+      return { candidates, selected: [] };
     },
     addTaskDependencies: (input: unknown) => {
       calls.push({ method: "add", input });
@@ -114,8 +148,12 @@ describe("dependency quick actions", () => {
     expect(
       await slot.findByRole("dialog", { name: "Add blocker…" }),
     ).toBeTruthy();
-    expect(await slot.findByText("Eligible blocker")).toBeTruthy();
-    expect(slot.queryByText("Dependent task")).toBeTruthy();
+    expect(
+      await slot.findByText("Eligible cross-project blocker"),
+    ).toBeTruthy();
+    expect(await slot.findByText("Other project · External")).toBeTruthy();
+    expect(slot.queryByText("Existing blocker")).toBeNull();
+    expect(slot.queryByText("Cycle-producing blocker")).toBeNull();
     expect(
       calls.find(({ method }) => method === "candidates")?.input,
     ).toMatchObject({
@@ -124,7 +162,7 @@ describe("dependency quick actions", () => {
       selectedTaskIds: [],
     });
 
-    fireEvent.click(slot.getByText("Eligible blocker"));
+    fireEvent.click(slot.getByText("Eligible cross-project blocker"));
     await waitFor(() =>
       expect(calls.find(({ method }) => method === "add")?.input).toEqual({
         dependentTaskId: task.id,
@@ -153,6 +191,20 @@ describe("dependency quick actions", () => {
       app.navPanels[0]!,
       { subPath: `${PROJECT_ID}?view=board` },
       { rpc: rpc(calls) },
+    );
+
+    await slot.findByText("Dependent task");
+    const boardListCalls = calls.filter(
+      ({ method }) => method === "list",
+    ).length;
+    await slot.emitRealtime("tasks:changed", {
+      taskId: task.id,
+      projectId: PROJECT_ID,
+    });
+    await waitFor(() =>
+      expect(
+        calls.filter(({ method }) => method === "list").length,
+      ).toBeGreaterThan(boardListCalls),
     );
 
     await openTaskMenu(slot);
