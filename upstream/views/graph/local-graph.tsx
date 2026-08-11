@@ -1,4 +1,5 @@
 import { Suspense, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import type { TasksQuery } from "../../shell/data.js";
 import { cn } from "@bb/shared-ui/lib/utils";
 import {
@@ -11,9 +12,19 @@ import { LazyRelationshipGraphCanvas } from "./lazy-canvas.js";
 import {
   RelationshipGraphControls,
   RelationshipLegend,
+  RelationshipRefreshNotice,
   RelationshipState,
   type RelationshipGraphSettings,
 } from "./relationship-ui.js";
+
+export interface LocalRelationshipGraphProps {
+  query: TasksQuery<RelationshipGraph>;
+  settings: RelationshipGraphSettings;
+  onSettingsChange: (settings: RelationshipGraphSettings) => void;
+  onOpenTask: (taskId: string) => void;
+  onExpand: () => void;
+  className?: string;
+}
 
 export function LocalRelationshipGraph({
   query,
@@ -22,14 +33,7 @@ export function LocalRelationshipGraph({
   onOpenTask,
   onExpand,
   className,
-}: {
-  query: TasksQuery<RelationshipGraph>;
-  settings: RelationshipGraphSettings;
-  onSettingsChange: (settings: RelationshipGraphSettings) => void;
-  onOpenTask: (taskId: string) => void;
-  onExpand: () => void;
-  className?: string;
-}) {
+}: LocalRelationshipGraphProps) {
   const [fitRequest, setFitRequest] = useState(0);
   const limited = useMemo(() => {
     if (!query.data) return null;
@@ -62,6 +66,12 @@ export function LocalRelationshipGraph({
         onFit={() => setFitRequest((value) => value + 1)}
         onExpand={onExpand}
         disabled={query.isLoading && !query.data}
+      />
+      <RelationshipRefreshNotice
+        error={query.error}
+        graph={query.data}
+        onRetry={query.refresh}
+        className="mt-2 rounded-md"
       />
       <div className="mt-2 h-56 overflow-hidden rounded-md border border-border-hairline bg-surface-recessed-soft-solid">
         <RelationshipState
@@ -117,4 +127,14 @@ export function LocalRelationshipGraph({
       ) : null}
     </section>
   );
+}
+
+/** Keep exactly one Local Graph mounted while its responsive host moves. */
+export function LocalRelationshipGraphPortal({
+  host,
+  ...props
+}: LocalRelationshipGraphProps & { host: HTMLElement | null }) {
+  return host
+    ? createPortal(<LocalRelationshipGraph {...props} />, host)
+    : null;
 }

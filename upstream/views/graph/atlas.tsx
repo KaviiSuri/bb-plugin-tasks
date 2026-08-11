@@ -16,6 +16,7 @@ import {
 import {
   RelationshipGraphControls,
   RelationshipLegend,
+  RelationshipRefreshNotice,
   RelationshipState,
   RelationshipTable,
   type RelationshipGraphSettings,
@@ -129,6 +130,11 @@ export function AtlasContent({
             </Button>
           ) : null}
         </div>
+        <RelationshipRefreshNotice
+          error={query.error}
+          graph={query.data}
+          onRetry={query.refresh}
+        />
         {query.data?.nodes.size &&
         query.data.nodes.size >= ATLAS_GRAPH_WARNING_LIMIT ? (
           <p className="border-b border-warning/30 bg-warning/10 px-3.5 py-2 text-xs text-warning">

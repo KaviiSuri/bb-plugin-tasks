@@ -1,4 +1,3 @@
-import type { ElkNode } from "elkjs/lib/elk.bundled.js";
 import type { RelationshipGraph } from "./model.js";
 
 export interface GraphPosition {
@@ -30,121 +29,234 @@ const TASK_HEIGHT = 70;
 const COMPACT_TASK_WIDTH = 72;
 const COMPACT_TASK_HEIGHT = 30;
 
-let elkPromise: Promise<
-  InstanceType<(typeof import("elkjs/lib/elk.bundled.js"))["default"]>
-> | null = null;
-
-async function elk() {
-  elkPromise ??= import("elkjs/lib/elk.bundled.js").then(
-    ({ default: ELK }) =>
-      new ELK({
-        algorithms: ["layered"],
-        defaultLayoutOptions: {
-          "elk.algorithm": "layered",
-          "elk.hierarchyHandling": "INCLUDE_CHILDREN",
-          "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
-        },
-      }),
-  );
-  return elkPromise;
+interface LayoutMetrics {
+  taskWidth: number;
+  taskHeight: number;
+  columnGap: number;
+  rowGap: number;
+  outerPadding: number;
+  groupPaddingX: number;
+  groupPaddingTop: number;
+  groupPaddingBottom: number;
 }
 
-function finite(value: number | undefined): number {
-  return Number.isFinite(value) ? (value ?? 0) : 0;
+function metrics(compact: boolean): LayoutMetrics {
+  return compact
+    ? {
+        taskWidth: COMPACT_TASK_WIDTH,
+        taskHeight: COMPACT_TASK_HEIGHT,
+        columnGap: 18,
+        rowGap: 8,
+        outerPadding: 8,
+        groupPaddingX: 8,
+        groupPaddingTop: 20,
+        groupPaddingBottom: 8,
+      }
+    : {
+        taskWidth: TASK_WIDTH,
+        taskHeight: TASK_HEIGHT,
+        columnGap: 52,
+        rowGap: 24,
+        outerPadding: 28,
+        groupPaddingX: 18,
+        groupPaddingTop: 34,
+        groupPaddingBottom: 18,
+      };
 }
 
-/**
- * ELK is instantiated only when a graph renders. BB currently emits one app
- * artifact, so the dynamic import defers evaluation but not bundle transfer.
- */
-export async function layoutRelationshipGraph(
+function directedRanks(graph: RelationshipGraph): Map<string, number> {
+  const ranks = new Map<string, number>([[graph.rootId, 0]]);
+  const queue = [graph.rootId];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) continue;
+    const rank = ranks.get(current) ?? 0;
+    for (const edge of graph.edges) {
+      let neighbor: string | null = null;
+      let nextRank = rank;
+      if (edge.source === current) {
+        neighbor = edge.target;
+        nextRank = rank + 1;
+      } else if (edge.target === current) {
+        neighbor = edge.source;
+        nextRank = rank - 1;
+      }
+      if (neighbor && !ranks.has(neighbor)) {
+        ranks.set(neighbor, nextRank);
+        queue.push(neighbor);
+      }
+    }
+  }
+  for (const taskId of graph.nodes.keys()) {
+    if (!ranks.has(taskId)) ranks.set(taskId, 0);
+  }
+  return ranks;
+}
+
+function rightwardLayout(
   graph: RelationshipGraph,
-  options: RelationshipLayoutOptions = {},
-): Promise<RelationshipGraphLayout> {
-  const width = options.compact ? COMPACT_TASK_WIDTH : TASK_WIDTH;
-  const height = options.compact ? COMPACT_TASK_HEIGHT : TASK_HEIGHT;
-  const subtaskIds = new Set(
+  layoutMetrics: LayoutMetrics,
+): RelationshipGraphLayout {
+  const ranks = directedRanks(graph);
+  const directSubtasks = new Set(
     graph.edges
       .filter(
         (edge) => edge.kind === "containment" && edge.source === graph.rootId,
       )
       .map((edge) => edge.target),
   );
-  const taskNode = (taskId: string): ElkNode => ({
-    id: taskId,
-    width,
-    height,
-  });
-  const children: ElkNode[] = [];
-  const subtasks = [...subtaskIds]
-    .filter((taskId) => graph.nodes.has(taskId))
-    .map(taskNode);
-  if (subtasks.length > 0) {
-    children.push({
-      id: "subtasks",
-      children: subtasks,
-      layoutOptions: {
-        "elk.algorithm": "layered",
-        "elk.direction": "DOWN",
-        "elk.padding": options.compact
-          ? "[top=20,left=8,bottom=8,right=8]"
-          : "[top=34,left=18,bottom=18,right=18]",
-        "elk.spacing.nodeNode": options.compact ? "8" : "24",
-      },
+  const columns = new Map<number, string[]>();
+  for (const [taskId, rank] of ranks) {
+    const entries = columns.get(rank) ?? [];
+    entries.push(taskId);
+    columns.set(rank, entries);
+  }
+  for (const entries of columns.values()) {
+    entries.sort((left, right) => {
+      const leftSubtask = directSubtasks.has(left) ? 0 : 1;
+      const rightSubtask = directSubtasks.has(right) ? 0 : 1;
+      return (
+        leftSubtask - rightSubtask ||
+        (graph.nodes.get(left)?.task.key ?? left).localeCompare(
+          graph.nodes.get(right)?.task.key ?? right,
+        )
+      );
     });
   }
-  for (const taskId of graph.nodes.keys()) {
-    if (!subtaskIds.has(taskId)) children.push(taskNode(taskId));
-  }
-  const input: ElkNode = {
-    id: "relationship-graph",
-    children,
-    edges: graph.edges.map((edge) => ({
-      id: edge.id,
-      sources: [edge.source],
-      targets: [edge.target],
-    })),
-    layoutOptions: {
-      "elk.algorithm": "layered",
-      "elk.direction": options.direction ?? "RIGHT",
-      "elk.hierarchyHandling": "INCLUDE_CHILDREN",
-      "elk.edgeRouting": "ORTHOGONAL",
-      "elk.spacing.nodeNode": options.compact ? "10" : "32",
-      "elk.layered.spacing.nodeNodeBetweenLayers": options.compact
-        ? "18"
-        : "52",
-      "elk.padding": options.compact
-        ? "[top=8,left=8,bottom=8,right=8]"
-        : "[top=28,left=28,bottom=28,right=28]",
-    },
-  };
-  const result = await (await elk()).layout(input);
+
+  const sortedRanks = [...columns.keys()].sort((a, b) => a - b);
+  const minRank = sortedRanks[0] ?? 0;
   const positions = new Map<string, GraphPosition>();
   let group: GraphGroupLayout | null = null;
-  for (const child of result.children ?? []) {
-    if (child.id !== "subtasks") {
-      positions.set(child.id, { x: finite(child.x), y: finite(child.y) });
-      continue;
+  let maxX = 0;
+  let maxY = 0;
+
+  for (const rank of sortedRanks) {
+    const taskIds = columns.get(rank) ?? [];
+    const x =
+      layoutMetrics.outerPadding +
+      (rank - minRank) * (layoutMetrics.taskWidth + layoutMetrics.columnGap);
+    let y = layoutMetrics.outerPadding;
+    const subtasks = taskIds.filter((taskId) => directSubtasks.has(taskId));
+    if (subtasks.length > 0) {
+      const groupX = x - layoutMetrics.groupPaddingX;
+      const groupY = y;
+      y += layoutMetrics.groupPaddingTop;
+      for (const taskId of subtasks) {
+        positions.set(taskId, { x, y });
+        y += layoutMetrics.taskHeight + layoutMetrics.rowGap;
+      }
+      const groupHeight =
+        layoutMetrics.groupPaddingTop +
+        subtasks.length * layoutMetrics.taskHeight +
+        Math.max(0, subtasks.length - 1) * layoutMetrics.rowGap +
+        layoutMetrics.groupPaddingBottom;
+      group = {
+        id: "subtasks",
+        position: { x: groupX, y: groupY },
+        width: layoutMetrics.taskWidth + layoutMetrics.groupPaddingX * 2,
+        height: groupHeight,
+      };
+      y = groupY + groupHeight + layoutMetrics.rowGap;
+      maxX = Math.max(maxX, groupX + group.width);
+      maxY = Math.max(maxY, groupY + group.height);
     }
-    const groupX = finite(child.x);
-    const groupY = finite(child.y);
-    group = {
-      id: "subtasks",
-      position: { x: groupX, y: groupY },
-      width: finite(child.width),
-      height: finite(child.height),
-    };
-    for (const subtask of child.children ?? []) {
-      positions.set(subtask.id, {
-        x: groupX + finite(subtask.x),
-        y: groupY + finite(subtask.y),
-      });
+    for (const taskId of taskIds) {
+      if (directSubtasks.has(taskId)) continue;
+      positions.set(taskId, { x, y });
+      maxX = Math.max(maxX, x + layoutMetrics.taskWidth);
+      maxY = Math.max(maxY, y + layoutMetrics.taskHeight);
+      y += layoutMetrics.taskHeight + layoutMetrics.rowGap;
     }
   }
+
   return {
     positions,
     group,
-    width: finite(result.width),
-    height: finite(result.height),
+    width: maxX + layoutMetrics.outerPadding,
+    height: maxY + layoutMetrics.outerPadding,
   };
+}
+
+function transpose(
+  layout: RelationshipGraphLayout,
+  graph: RelationshipGraph,
+  layoutMetrics: LayoutMetrics,
+): RelationshipGraphLayout {
+  const positions = new Map<string, GraphPosition>();
+  for (const [taskId, position] of layout.positions) {
+    positions.set(taskId, { x: position.y, y: position.x });
+  }
+  let group: GraphGroupLayout | null = null;
+  if (layout.group) {
+    const subtaskPositions = graph.edges
+      .filter(
+        (edge) => edge.kind === "containment" && edge.source === graph.rootId,
+      )
+      .map((edge) => positions.get(edge.target))
+      .filter((position): position is GraphPosition => position !== undefined);
+    if (subtaskPositions.length > 0) {
+      const minX = Math.min(...subtaskPositions.map((position) => position.x));
+      const minY = Math.min(...subtaskPositions.map((position) => position.y));
+      const maxX = Math.max(...subtaskPositions.map((position) => position.x));
+      const maxY = Math.max(...subtaskPositions.map((position) => position.y));
+      group = {
+        id: "subtasks",
+        position: {
+          x: minX - layoutMetrics.groupPaddingX,
+          y: minY - layoutMetrics.groupPaddingTop,
+        },
+        width:
+          maxX -
+          minX +
+          layoutMetrics.taskWidth +
+          layoutMetrics.groupPaddingX * 2,
+        height:
+          maxY -
+          minY +
+          layoutMetrics.taskHeight +
+          layoutMetrics.groupPaddingTop +
+          layoutMetrics.groupPaddingBottom,
+      };
+    }
+  }
+  const maxX = Math.max(
+    0,
+    ...[...positions.values()].map(
+      (position) => position.x + layoutMetrics.taskWidth,
+    ),
+    group ? group.position.x + group.width : 0,
+  );
+  const maxY = Math.max(
+    0,
+    ...[...positions.values()].map(
+      (position) => position.y + layoutMetrics.taskHeight,
+    ),
+    group ? group.position.y + group.height : 0,
+  );
+  return {
+    positions,
+    group,
+    width: maxX + layoutMetrics.outerPadding,
+    height: maxY + layoutMetrics.outerPadding,
+  };
+}
+
+/**
+ * Deterministic bounded layered/compound layout for the relationship projection.
+ *
+ * BB packages a plugin frontend as one offline artifact, so the approved ELK
+ * prototype imposed its full worker runtime on every Tasks page even when the
+ * graph was never opened. This narrow layout keeps blocker-to-dependent ranks,
+ * groups direct subtasks, and avoids that always-transferred runtime.
+ */
+export async function layoutRelationshipGraph(
+  graph: RelationshipGraph,
+  options: RelationshipLayoutOptions = {},
+): Promise<RelationshipGraphLayout> {
+  const layoutMetrics = metrics(options.compact ?? false);
+  const layout = rightwardLayout(graph, layoutMetrics);
+  return options.direction === "DOWN"
+    ? transpose(layout, graph, layoutMetrics)
+    : layout;
 }

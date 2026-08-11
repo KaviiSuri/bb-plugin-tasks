@@ -135,6 +135,36 @@ describe("relationship graph data loader", () => {
     expect(graph.errors.join(" ")).toContain("Could not load subtasks");
   });
 
+  it("caps Local Graph nodes and dependency RPCs at its data budget", async () => {
+    const children = Array.from({ length: 30 }, (_, index) =>
+      task(`child-${index}`, index + 10, root.id),
+    );
+    let dependencyRequests = 0;
+    const rpc = {
+      call: async (method: string) => {
+        if (method === "listProjects") return { projects: [project] };
+        if (method === "getTask") return { task: null };
+        if (method === "listTasks") {
+          return { tasks: children, nextCursor: null };
+        }
+        if (method === "listTaskDependencies") {
+          dependencyRequests += 1;
+          return { blockedBy: [], blocks: [] };
+        }
+        throw new Error(`Unexpected RPC ${method}`);
+      },
+    } as unknown as TasksRpc;
+
+    const graph = await loadRelationshipGraph(rpc, root, {
+      dependencyDepth: 1,
+      nodeLimit: 12,
+    });
+
+    expect(graph.nodes.size).toBe(12);
+    expect(dependencyRequests).toBeLessThanOrEqual(12);
+    expect(graph.omittedNodeCount).toBe(19);
+  });
+
   it("reports exact bounded dependency omissions instead of truncating silently", async () => {
     const graph = await loadRelationshipGraph(
       rpcWith({

@@ -36,8 +36,8 @@ const task = (
   unresolvedBlockerCount: 0,
 });
 
-describe("ELK relationship layout", () => {
-  it("lays out a compound subtask group with finite task positions", async () => {
+describe("bounded relationship layout", () => {
+  it("deterministically layers blockers, root, and grouped subtasks", async () => {
     const root = task("root", 1, null);
     const child = task("child", 2, root.id);
     const blocker = task("blocker", 3, null);
@@ -57,6 +57,13 @@ describe("ELK relationship layout", () => {
 
     expect(layout.group).not.toBeNull();
     expect(layout.group?.width).toBeGreaterThan(0);
+    expect(layout.positions.get(blocker.id)!.x).toBeLessThan(
+      layout.positions.get(root.id)!.x,
+    );
+    expect(layout.positions.get(root.id)!.x).toBeLessThan(
+      layout.positions.get(child.id)!.x,
+    );
+    expect(await layoutRelationshipGraph(graph)).toEqual(layout);
     for (const id of [root.id, child.id, blocker.id]) {
       expect(layout.positions.get(id)).toEqual({
         x: expect.any(Number),

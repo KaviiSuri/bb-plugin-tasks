@@ -34,8 +34,8 @@ import { DetailToasts, useDetailToasts } from "./toast.js";
 import { Icon } from "@bb/shared-ui/icon";
 import { cn } from "@bb/shared-ui/lib/utils";
 import { Skeleton } from "@bb/shared-ui/skeleton";
-import { useRelationshipGraph } from "../graph/data.js";
-import { LocalRelationshipGraph } from "../graph/local-graph.js";
+import { useLocalRelationshipGraph } from "../graph/data.js";
+import { LocalRelationshipGraphPortal } from "../graph/local-graph.js";
 import { DEFAULT_GRAPH_FILTERS } from "../graph/model.js";
 import type { RelationshipGraphSettings } from "../graph/relationship-ui.js";
 
@@ -294,6 +294,27 @@ function TaskDetail({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const subtasksRef = useRef<HTMLElement>(null);
   const dependenciesRef = useRef<HTMLElement>(null);
+  const detailContainerRef = useRef<HTMLDivElement>(null);
+  const [wideGraphLayout, setWideGraphLayout] = useState(false);
+  const [narrowGraphHost, setNarrowGraphHost] = useState<HTMLDivElement | null>(
+    null,
+  );
+  const [wideGraphHost, setWideGraphHost] = useState<HTMLDivElement | null>(
+    null,
+  );
+
+  useEffect(() => {
+    const container = detailContainerRef.current;
+    if (!container || typeof ResizeObserver === "undefined") return;
+    const update = (width: number) => setWideGraphLayout(width >= 720);
+    update(container.getBoundingClientRect().width);
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) update(entry.contentRect.width);
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     if (!focusDependencies) return;
@@ -507,7 +528,7 @@ function TaskDetail({
     }
   };
 
-  const relationshipGraph = useRelationshipGraph(
+  const relationshipGraph = useLocalRelationshipGraph(
     task,
     relationshipSettings.depth,
   );
@@ -536,7 +557,10 @@ function TaskDetail({
   const parentTask = parent.data ?? null;
 
   return (
-    <div className="@container flex min-h-full flex-col bg-surface-recessed-solid p-3">
+    <div
+      ref={detailContainerRef}
+      className="@container flex min-h-full flex-col bg-surface-recessed-solid p-3"
+    >
       <div className="flex flex-1 items-stretch rounded-lg border border-border bg-card shadow-2xs">
         <div className="mx-auto w-full min-w-0 max-w-[55rem] flex-1 px-7 pb-16 pt-8 @3xl:px-13 @3xl:pt-11">
           {parentTask || subtasks.data?.length ? (
@@ -664,14 +688,7 @@ function TaskDetail({
             }
           />
 
-          <LocalRelationshipGraph
-            query={relationshipGraph}
-            settings={relationshipSettings}
-            onSettingsChange={setRelationshipSettings}
-            onOpenTask={openGraphTask}
-            onExpand={expandGraph}
-            className="@[45rem]:hidden"
-          />
+          <div ref={setNarrowGraphHost} className="@[45rem]:hidden" />
 
           {/* With no attached threads the section disappears entirely; the
               rail's Dispatch button is the entry point. */}
@@ -703,17 +720,17 @@ function TaskDetail({
           onUpdate={(update) => void updateTask(update)}
           onError={(message) => push("error", message)}
           className="hidden @[45rem]:block"
-          relationshipGraph={
-            <LocalRelationshipGraph
-              query={relationshipGraph}
-              settings={relationshipSettings}
-              onSettingsChange={setRelationshipSettings}
-              onOpenTask={openGraphTask}
-              onExpand={expandGraph}
-            />
-          }
+          relationshipGraph={<div ref={setWideGraphHost} />}
         />
       </div>
+      <LocalRelationshipGraphPortal
+        host={wideGraphLayout ? wideGraphHost : narrowGraphHost}
+        query={relationshipGraph}
+        settings={relationshipSettings}
+        onSettingsChange={setRelationshipSettings}
+        onOpenTask={openGraphTask}
+        onExpand={expandGraph}
+      />
       <DetailToasts toasts={toasts} onDismiss={dismiss} />
     </div>
   );

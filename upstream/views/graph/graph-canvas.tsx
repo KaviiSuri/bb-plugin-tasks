@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BaseEdge,
   EdgeLabelRenderer,
@@ -271,11 +271,18 @@ function GraphCanvasInner({
   const [nodes, setNodes] = useState<FlowNode[]>([]);
   const [edges, setEdges] = useState<RelationshipFlowEdge[]>([]);
   const [layoutError, setLayoutError] = useState<string | null>(null);
+  const [focusedTaskId, setFocusedTaskId] = useState("");
+  const canvasRef = useRef<HTMLDivElement>(null);
   const { fitView } = useReactFlow<FlowNode, RelationshipFlowEdge>();
+  const activeTaskId = focusedTaskId || selectedTaskId;
   const connected = useMemo(
-    () => connectedTaskIds(graph, selectedTaskId),
-    [graph, selectedTaskId],
+    () => connectedTaskIds(graph, activeTaskId),
+    [activeTaskId, graph],
   );
+
+  useEffect(() => {
+    setFocusedTaskId((current) => (graph.nodes.has(current) ? current : ""));
+  }, [graph]);
 
   useEffect(() => {
     let active = true;
@@ -308,12 +315,12 @@ function GraphCanvasInner({
             data: {
               entry,
               root: taskId === graph.rootId,
-              dimmed: selectedTaskId !== "" && !connected.has(taskId),
+              dimmed: activeTaskId !== "" && !connected.has(taskId),
               compact,
             },
             draggable: false,
             connectable: false,
-            selected: taskId === selectedTaskId,
+            selected: taskId === activeTaskId,
             focusable: true,
             selectable: true,
             ariaLabel: relationshipNodeAriaLabel(graph, taskId),
@@ -355,9 +362,9 @@ function GraphCanvasInner({
             selectable: false,
             style: {
               opacity:
-                selectedTaskId !== "" &&
-                relationship.source !== selectedTaskId &&
-                relationship.target !== selectedTaskId
+                activeTaskId !== "" &&
+                relationship.source !== activeTaskId &&
+                relationship.target !== activeTaskId
                   ? 0.3
                   : 1,
             },
@@ -401,9 +408,9 @@ function GraphCanvasInner({
               data: {
                 ...node.data,
                 root: node.id === graph.rootId,
-                dimmed: selectedTaskId !== "" && !connected.has(node.id),
+                dimmed: activeTaskId !== "" && !connected.has(node.id),
               },
-              selected: node.id === selectedTaskId,
+              selected: node.id === activeTaskId,
             }
           : node,
       ),
@@ -414,41 +421,52 @@ function GraphCanvasInner({
         style: {
           ...edge.style,
           opacity:
-            selectedTaskId !== "" &&
-            edge.source !== selectedTaskId &&
-            edge.target !== selectedTaskId
+            activeTaskId !== "" &&
+            edge.source !== activeTaskId &&
+            edge.target !== activeTaskId
               ? 0.3
               : 1,
         },
       })),
     );
-  }, [connected, graph.rootId, selectedTaskId]);
+  }, [activeTaskId, connected, graph.rootId]);
 
   useEffect(() => {
     if (fitRequest === 0 || nodes.length === 0) return;
     void fitView({ padding: compact ? 0.08 : 0.15, duration: 0 });
   }, [compact, fitRequest, fitView, nodes.length]);
 
+  const taskIdForTarget = (target: EventTarget | null): string | null => {
+    if (!(target instanceof Element)) return null;
+    const taskElement = target.closest<HTMLElement>(
+      "[data-task-graph-node], .react-flow__node[data-id]",
+    );
+    const taskId =
+      taskElement?.dataset.taskGraphNode ?? taskElement?.dataset.id;
+    return taskId && graph.nodes.has(taskId) ? taskId : null;
+  };
+
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const focusedTaskId = taskIdForTarget(event.target);
     if (event.key === "0") {
       event.preventDefault();
       void fitView({ padding: compact ? 0.08 : 0.15, duration: 0 });
       return;
     }
-    if ((event.key === "o" || event.key === "O") && selectedTaskId) {
+    if ((event.key === "o" || event.key === "O") && focusedTaskId) {
       event.preventDefault();
-      onOpenTask(selectedTaskId);
+      onOpenTask(focusedTaskId);
       return;
     }
-    if (event.key === "Enter" && selectedTaskId) {
+    if (event.key === "Enter" && focusedTaskId) {
       event.preventDefault();
-      if (compact) onOpenTask(selectedTaskId);
-      else onSelect(selectedTaskId);
+      if (compact) onOpenTask(focusedTaskId);
+      else onSelect(focusedTaskId);
       return;
     }
-    if (!event.key.startsWith("Arrow") || !selectedTaskId) return;
+    if (!event.key.startsWith("Arrow") || !focusedTaskId) return;
     const neighbor = chooseDirectionalNeighbor(
-      selectedTaskId,
+      focusedTaskId,
       event.key,
       graph,
       nodes,
@@ -457,8 +475,10 @@ function GraphCanvasInner({
     event.preventDefault();
     onSelect(neighbor);
     requestAnimationFrame(() => {
-      document
-        .querySelector<HTMLElement>(`[data-task-graph-node="${neighbor}"]`)
+      canvasRef.current
+        ?.querySelector<HTMLElement>(
+          `.react-flow__node[data-id="${neighbor}"], [data-task-graph-node="${neighbor}"]`,
+        )
         ?.focus();
     });
   };
@@ -474,7 +494,18 @@ function GraphCanvasInner({
     );
   }
   return (
-    <div className="relative size-full" onKeyDown={onKeyDown}>
+    <div
+      ref={canvasRef}
+      data-relationship-graph-canvas
+      className="relative size-full"
+      onFocusCapture={(event) => {
+        const taskId = taskIdForTarget(event.target);
+        if (!taskId) return;
+        setFocusedTaskId(taskId);
+        if (!compact && taskId !== selectedTaskId) onSelect(taskId);
+      }}
+      onKeyDown={onKeyDown}
+    >
       <ReactFlow<FlowNode, RelationshipFlowEdge>
         nodes={nodes}
         edges={edges}

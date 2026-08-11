@@ -1,5 +1,11 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project, Task } from "../../shared/contract.js";
 import { buildRelationshipGraph } from "./model.js";
 
@@ -57,13 +63,14 @@ vi.mock("../../shell/routes.js", () => ({
 vi.mock("../../shell/data.js", () => ({
   useTasksQuery: vi.fn(),
 }));
+let graphQuery = {
+  data: graph,
+  error: null as string | null,
+  isLoading: false,
+  refresh,
+};
 vi.mock("./data.js", () => ({
-  useRelationshipGraph: () => ({
-    data: graph,
-    error: null,
-    isLoading: false,
-    refresh,
-  }),
+  useRelationshipGraph: () => graphQuery,
 }));
 vi.mock("./lazy-canvas.js", () => ({
   LazyRelationshipGraphCanvas: ({
@@ -76,6 +83,18 @@ vi.mock("./lazy-canvas.js", () => ({
 }));
 
 const { AtlasContent } = await import("./atlas.js");
+
+afterEach(cleanup);
+beforeEach(() => {
+  graphQuery = {
+    data: graph,
+    error: null,
+    isLoading: false,
+    refresh,
+  };
+  go.mockClear();
+  refresh.mockClear();
+});
 
 describe("relationship Atlas", () => {
   it("keeps graph/table parity and writes filter depth into replaceable route state", () => {
@@ -112,5 +131,29 @@ describe("relationship Atlas", () => {
       expect.objectContaining({ kind: "graph", taskKey: root.key, depth: 2 }),
       { replace: true },
     );
+  });
+
+  it("exposes a retryable refresh failure without hiding stale Atlas data", () => {
+    graphQuery = { ...graphQuery, error: "refresh offline" };
+    render(
+      <AtlasContent
+        root={root}
+        initialSettings={{
+          depth: 1,
+          filters: {
+            containment: true,
+            dependencies: true,
+            resolved: true,
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Showing previously loaded relationships",
+    );
+    expect(screen.getByTestId("atlas-canvas")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(refresh).toHaveBeenCalled();
   });
 });

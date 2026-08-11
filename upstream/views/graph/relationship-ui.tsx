@@ -291,6 +291,36 @@ export function RelationshipTable({
   );
 }
 
+export function RelationshipRefreshNotice({
+  error,
+  graph,
+  onRetry,
+  className,
+}: {
+  error: string | null;
+  graph: RelationshipGraph | undefined;
+  onRetry: () => void;
+  className?: string;
+}) {
+  if (!error || !graph) return null;
+  return (
+    <div
+      role="alert"
+      className={cn(
+        "flex items-center gap-2 border border-warning/30 bg-warning/10 px-2.5 py-2 text-xs text-warning",
+        className,
+      )}
+    >
+      <span className="min-w-0 flex-1">
+        Showing previously loaded relationships. Refresh failed: {error}
+      </span>
+      <Button variant="outline" size="sm" className="h-6" onClick={onRetry}>
+        Retry
+      </Button>
+    </div>
+  );
+}
+
 export function RelationshipState({
   isLoading,
   error,

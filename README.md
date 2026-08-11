@@ -40,6 +40,15 @@ npm run build          # regenerates the shim, then bb plugin build
 bb plugin dev .        # hot-reload while iterating
 ```
 
+## Relationship graph layout
+
+The task relationship graph uses React Flow with a small deterministic layered
+layout implemented in the plugin. The approved prototype used ELK, but BB's
+offline plugin builder currently emits one always-transferred frontend artifact;
+ELK added roughly 3.33 MB raw / 571 KB gzip even when no graph was opened. The
+bounded in-repo layout preserves blocker-to-dependent ranks and direct-subtask
+grouping without shipping that runtime on every Tasks page.
+
 ## Install
 
 The plugin id `tasks` is reserved for the bundled plugin, so this installs
