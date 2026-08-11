@@ -352,9 +352,16 @@ function addTaskDependenciesWithActivity(
     }
     return blocker;
   });
-  const dependencies = store.tasks.addTaskDependencies(
-    dependent.id,
-    blockers.map((blocker) => blocker.id),
+  const { value: dependencies } = mutateWithBlockingTransitions(
+    store,
+    [dependent],
+    authorName,
+    { kind: "dependency", action: "added" },
+    () =>
+      store.tasks.addTaskDependencies(
+        dependent.id,
+        blockers.map((blocker) => blocker.id),
+      ),
   );
   for (const blocker of blockers) {
     writeSystemComments(store, dependent.id, authorName, [
