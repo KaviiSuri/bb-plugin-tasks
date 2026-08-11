@@ -37,6 +37,13 @@ function projectAndTasks(store: TasksStore) {
   return { firstProject, secondProject, dependent, blocker, third };
 }
 
+function deletionTestHarness() {
+  const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
+  const store = createStore(bb);
+  registerTasksApi(bb, store);
+  return { db: bb.storage.database(), harness, store };
+}
+
 describe("task dependency storage", () => {
   it("migrates real SQLite with reciprocal indexes and cascading endpoints", async () => {
     const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
@@ -189,6 +196,225 @@ describe("task dependency contract and RPC", () => {
     );
     await harness.dispose();
   });
+});
+
+describe("dependency cleanup during deletion", () => {
+  it("deletes every incident edge and records directional activity on task survivors", async () => {
+    const { db, harness, store } = deletionTestHarness();
+    const { dependent, blocker, third } = projectAndTasks(store.tasks);
+    store.tasks.addTaskDependencies(dependent.id, [blocker.id]);
+    store.tasks.addTaskDependencies(third.id, [dependent.id]);
+
+    await expect(
+      harness.callRpc("deleteTask", { taskId: dependent.id }),
+    ).resolves.toEqual({
+      deleted: true,
+    });
+
+    expect(store.tasks.getTask(dependent.id)).toBeUndefined();
+    expect(store.tasks.listTaskDependencies(blocker.id).blocks).toEqual([]);
+    expect(store.tasks.listTaskDependencies(third.id).blockedBy).toEqual([]);
+    expect(
+      db.prepare("SELECT COUNT(*) AS count FROM task_dependencies").get(),
+    ).toEqual({ count: 0 });
+    expect(store.tasks.listComments(blocker.id).at(-1)).toMatchObject({
+      kind: "system",
+      authorName: "Tasks",
+      body: `Blocks ${dependent.key} removed because ${dependent.key} was deleted`,
+    });
+    expect(store.tasks.listComments(third.id).at(-1)?.body).toBe(
+      `Blocked by ${dependent.key} removed because ${dependent.key} was deleted`,
+    );
+    expect(harness.realtimeSignals).toEqual([
+      {
+        channel: "tasks:changed",
+        payload: { taskId: dependent.id, projectId: dependent.projectId },
+      },
+      {
+        channel: "tasks:changed",
+        payload: { taskId: blocker.id, projectId: blocker.projectId },
+      },
+      { channel: "comments:changed", payload: { taskId: blocker.id } },
+      {
+        channel: "tasks:changed",
+        payload: { taskId: third.id, projectId: third.projectId },
+      },
+      { channel: "comments:changed", payload: { taskId: third.id } },
+    ]);
+    await harness.dispose();
+  });
+
+  it("force-deletes a project after recording only cross-project survivor activity", async () => {
+    const { db, harness, store } = deletionTestHarness();
+    const { firstProject, dependent, blocker, third } = projectAndTasks(
+      store.tasks,
+    );
+    const externalDependent = store.tasks.createTask({
+      projectId: blocker.projectId,
+      title: "External dependent",
+    });
+    store.tasks.addTaskDependencies(dependent.id, [blocker.id]);
+    store.tasks.addTaskDependencies(third.id, [dependent.id]);
+    store.tasks.addTaskDependencies(externalDependent.id, [third.id]);
+    db.exec(`
+      CREATE TRIGGER reject_deleted_project_activity
+      BEFORE INSERT ON comments
+      WHEN NEW.task_id IN ('${dependent.id}', '${third.id}')
+      BEGIN
+        SELECT RAISE(ABORT, 'activity written to a cascading task');
+      END;
+    `);
+
+    await expect(
+      harness.callRpc("deleteProject", {
+        projectId: firstProject.id,
+        force: true,
+      }),
+    ).resolves.toEqual({ ok: true, deleted: true });
+
+    expect(store.tasks.getProject(firstProject.id)).toBeUndefined();
+    expect(store.tasks.getTask(dependent.id)).toBeUndefined();
+    expect(store.tasks.getTask(third.id)).toBeUndefined();
+    expect(store.tasks.listTaskDependencies(blocker.id).blocks).toEqual([]);
+    expect(
+      store.tasks.listTaskDependencies(externalDependent.id).blockedBy,
+    ).toEqual([]);
+    expect(store.tasks.listComments(blocker.id).at(-1)?.body).toBe(
+      `Blocks ${dependent.key} removed because ${dependent.key} was deleted`,
+    );
+    expect(store.tasks.listComments(externalDependent.id).at(-1)?.body).toBe(
+      `Blocked by ${third.key} removed because ${third.key} was deleted`,
+    );
+    expect(harness.realtimeSignals).toEqual([
+      {
+        channel: "tasks:changed",
+        payload: { taskId: blocker.id, projectId: blocker.projectId },
+      },
+      { channel: "comments:changed", payload: { taskId: blocker.id } },
+      {
+        channel: "tasks:changed",
+        payload: {
+          taskId: externalDependent.id,
+          projectId: externalDependent.projectId,
+        },
+      },
+      {
+        channel: "comments:changed",
+        payload: { taskId: externalDependent.id },
+      },
+      {
+        channel: "projects:changed",
+        payload: { projectId: firstProject.id },
+      },
+    ]);
+    await harness.dispose();
+  });
+
+  it.each([
+    { deletionKind: "task", fileName: "task.txt" },
+    { deletionKind: "forced-project", fileName: "project.txt" },
+  ] as const)(
+    "publishes $deletionKind and survivor invalidations when blob cleanup fails after commit",
+    async ({ deletionKind, fileName }) => {
+      const { harness, store } = deletionTestHarness();
+      const { firstProject, dependent, blocker } = projectAndTasks(store.tasks);
+      store.tasks.addTaskDependencies(dependent.id, [blocker.id]);
+      store.tasks.createAttachment({
+        taskId: dependent.id,
+        fileName,
+        mime: "text/plain",
+        sizeBytes: 1,
+        blobPath: `blobs/${deletionKind}/${fileName}`,
+        isImage: false,
+      });
+
+      const deletion =
+        deletionKind === "task"
+          ? harness.callRpc("deleteTask", { taskId: dependent.id })
+          : harness.callRpc("deleteProject", {
+              projectId: firstProject.id,
+              force: true,
+            });
+      await expect(deletion).rejects.toThrow("registerAttachments");
+
+      expect(store.tasks.getTask(dependent.id)).toBeUndefined();
+      const remainingProject = store.tasks.getProject(firstProject.id);
+      if (deletionKind === "task") {
+        expect(remainingProject).toMatchObject({ id: firstProject.id });
+      } else {
+        expect(remainingProject).toBeUndefined();
+      }
+      expect(store.tasks.listTaskDependencies(blocker.id).blocks).toEqual([]);
+      expect(store.tasks.listComments(blocker.id)).toHaveLength(1);
+      const survivorSignals = [
+        {
+          channel: "tasks:changed",
+          payload: { taskId: blocker.id, projectId: blocker.projectId },
+        },
+        { channel: "comments:changed", payload: { taskId: blocker.id } },
+      ];
+      expect(harness.realtimeSignals).toEqual(
+        deletionKind === "task"
+          ? [
+              {
+                channel: "tasks:changed",
+                payload: {
+                  taskId: dependent.id,
+                  projectId: dependent.projectId,
+                },
+              },
+              ...survivorSignals,
+            ]
+          : [
+              ...survivorSignals,
+              {
+                channel: "projects:changed",
+                payload: { projectId: firstProject.id },
+              },
+            ],
+      );
+      await harness.dispose();
+    },
+  );
+
+  it.each(["task", "project"] as const)(
+    "rolls survivor activity and edges back when %s deletion fails",
+    async (deletionKind) => {
+      const { db, harness, store } = deletionTestHarness();
+      const { firstProject, dependent, blocker } = projectAndTasks(store.tasks);
+      store.tasks.addTaskDependencies(dependent.id, [blocker.id]);
+      const table = deletionKind === "task" ? "tasks" : "projects";
+      const id = deletionKind === "task" ? dependent.id : firstProject.id;
+      db.exec(`
+        CREATE TRIGGER reject_dependency_${deletionKind}_delete
+        BEFORE DELETE ON ${table}
+        WHEN OLD.id = '${id}'
+        BEGIN
+          SELECT RAISE(ABORT, 'injected ${deletionKind} deletion failure');
+        END;
+      `);
+
+      const deletion =
+        deletionKind === "task"
+          ? harness.callRpc("deleteTask", { taskId: dependent.id })
+          : harness.callRpc("deleteProject", {
+              projectId: firstProject.id,
+              force: true,
+            });
+      await expect(deletion).rejects.toThrow(
+        `injected ${deletionKind} deletion failure`,
+      );
+
+      expect(store.tasks.getProject(firstProject.id)).toBeDefined();
+      expect(store.tasks.getTask(dependent.id)).toBeDefined();
+      expect(
+        store.tasks.listTaskDependencies(dependent.id).blockedBy,
+      ).toHaveLength(1);
+      expect(store.tasks.listComments(blocker.id)).toEqual([]);
+      expect(harness.realtimeSignals).toEqual([]);
+      await harness.dispose();
+    },
+  );
 });
 
 describe("task dependency CLI", () => {
