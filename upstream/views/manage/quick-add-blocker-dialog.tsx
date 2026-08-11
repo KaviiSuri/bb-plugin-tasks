@@ -54,7 +54,7 @@ export function QuickAddBlockerDialog({
         }
       }}
     >
-      <DialogContent className="max-w-lg p-0">
+      <DialogContent className="max-w-lg overflow-hidden p-0">
         <DialogHeader className="px-4 pt-4">
           <DialogTitle>Add blocker…</DialogTitle>
           <DialogDescription>

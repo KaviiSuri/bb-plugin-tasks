@@ -145,9 +145,11 @@ describe("dependency quick actions", () => {
 
     await openTaskMenu(slot);
     fireEvent.click(slot.getByRole("menuitem", { name: "Add blocker…" }));
+    const dialog = await slot.findByRole("dialog", { name: "Add blocker…" });
+    expect(dialog.className).toContain("overflow-hidden");
     expect(
-      await slot.findByRole("dialog", { name: "Add blocker…" }),
-    ).toBeTruthy();
+      dialog.querySelector("[data-embedded-blocker-picker]")?.className,
+    ).toContain("min-w-0");
     expect(
       await slot.findByText("Eligible cross-project blocker"),
     ).toBeTruthy();

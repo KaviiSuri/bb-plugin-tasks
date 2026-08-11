@@ -195,7 +195,10 @@ export const BlockerPicker = forwardRef<
           </div>
         </div>
       ) : null}
-      <Command shouldFilter={false}>
+      <Command
+        shouldFilter={false}
+        className={embedded ? "min-w-0 max-w-full" : undefined}
+      >
         <CommandInput
           placeholder="Search task keys and titles…"
           value={query}
@@ -257,7 +260,16 @@ export const BlockerPicker = forwardRef<
     </>
   );
 
-  if (embedded) return <div className="min-h-0 p-2">{picker}</div>;
+  if (embedded) {
+    return (
+      <div
+        data-embedded-blocker-picker
+        className="min-h-0 w-full min-w-0 max-w-full overflow-hidden p-2"
+      >
+        {picker}
+      </div>
+    );
+  }
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
