@@ -13,6 +13,7 @@ export const delegationRpcContract = defineRpcContract({
         taskId: idSchema,
         presetId: idSchema,
         extraInstructions: z.string().optional(),
+        allowBlocked: z.boolean().default(false),
       })
       .strict(),
     output: z.object({ threadId: threadIdSchema }).strict(),
@@ -20,7 +21,13 @@ export const delegationRpcContract = defineRpcContract({
   // Plugin RPC names cannot contain dots, so this is the wire spelling of
   // the conceptual `taskThreads.attach` operation.
   taskThreadsAttach: {
-    input: z.object({ taskId: idSchema, threadId: threadIdSchema }).strict(),
+    input: z
+      .object({
+        taskId: idSchema,
+        threadId: threadIdSchema,
+        allowBlocked: z.boolean().default(false),
+      })
+      .strict(),
     output: z.object({ threadId: threadIdSchema }).strict(),
   },
 });

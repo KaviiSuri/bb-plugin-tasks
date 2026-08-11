@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadPluginApp, renderSlot } from "@bb/plugin-sdk/testing/app";
 
@@ -43,6 +43,8 @@ const task = {
   createdAt: "2026-07-15T00:00:00.000Z",
   updatedAt: "2026-07-15T00:00:00.000Z",
   labelIds: [],
+  isBlocked: false,
+  unresolvedBlockerCount: 0,
 };
 
 function taskThreadRow(id: string, threadId: string, title: string) {
@@ -94,6 +96,84 @@ function detailRpc(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+describe("blocked dispatch warning", () => {
+  it("waits for Continue anyway before dispatching with allowBlocked", async () => {
+    const blockedTask = {
+      ...task,
+      isBlocked: true,
+      unresolvedBlockerCount: 1,
+    };
+    const blocker = {
+      ...task,
+      id: "01HZZZZZZZZZZZZZZZZZZZZZB1",
+      number: 1,
+      key: "TSK-1",
+      title: "Resolve prerequisite",
+      status: "in_progress",
+    };
+    const preset = {
+      id: "01HZZZZZZZZZZZZZZZZZZZZZP2",
+      name: "Review worker",
+      providerId: "codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high",
+      permissionMode: "full",
+      environmentKind: "project-default",
+      baseBranch: null,
+      machineId: null,
+      instructions: "",
+      builtin: false,
+      createdAt: "2026-07-15T00:00:00.000Z",
+    };
+    const slot = renderSlot(
+      app.navPanels[0]!,
+      { subPath: "task/TSK-5" },
+      {
+        rpc: detailRpc({
+          getTaskByKey: () => ({ task: blockedTask }),
+          listTasks: () => ({ tasks: [blockedTask] }),
+          listPresets: () => ({ presets: [preset] }),
+          listTaskDependencies: () => ({
+            blockedBy: [{ task: blocker, project: { id: PROJECT_ID } }],
+            blocks: [],
+          }),
+          delegate: () => ({ threadId: "thr_dispatched" }),
+        }),
+      },
+    );
+
+    await waitFor(() =>
+      expect(
+        slot.getAllByRole("button", { name: "Review worker" }).length,
+      ).toBeGreaterThan(1),
+    );
+    const dispatchButtons = slot.getAllByRole("button", {
+      name: "Review worker",
+    });
+    const dispatchButton = dispatchButtons.find(
+      (button) => !button.hasAttribute("title"),
+    );
+    expect(dispatchButton).toBeDefined();
+    fireEvent.click(dispatchButton!);
+    await slot.findByRole("dialog", { name: "Begin blocked work?" });
+    expect(slot.getByText(/TSK-5 is blocked by TSK-1/)).toBeTruthy();
+    expect(slot.rpcCalls.some((call) => call.method === "delegate")).toBe(
+      false,
+    );
+
+    fireEvent.click(slot.getByRole("button", { name: "Continue anyway" }));
+    await waitFor(() =>
+      expect(
+        slot.rpcCalls.some(
+          (call) =>
+            call.method === "delegate" &&
+            JSON.stringify(call.input).includes('"allowBlocked":true'),
+        ),
+      ).toBe(true),
+    );
+  });
+});
 
 describe("task detail pull request pills", () => {
   it("links a thread's pull request as a keyboard-reachable anchor", async () => {

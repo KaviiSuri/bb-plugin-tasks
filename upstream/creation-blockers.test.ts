@@ -63,6 +63,7 @@ describe("atomic task plus initial dependency creation", () => {
       expect(
         store.tasks.listComments(result.task.id).map((comment) => comment.body),
       ).toEqual([
+        "Blocking state changed to Blocked after dependency addition by Tester",
         `Blocked by ${data.otherActive.key} added by Tester`,
         `Blocked by ${data.otherCanceled.key} added by Tester`,
       ]);

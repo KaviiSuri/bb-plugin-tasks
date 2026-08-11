@@ -354,6 +354,146 @@ describe("task delegation", () => {
     await harness.dispose();
   });
 
+  it("rejects blocked dispatch by default and preserves seed, activity, and realtime after override", async () => {
+    const { bb, harness } = createFakePluginHost({
+      pluginId: "tasks",
+      sdk: {
+        threads: {
+          spawn: async () => ({ id: "thr_blocked_override" }),
+          get: async () =>
+            makeThreadResponse({
+              id: "thr_blocked_override",
+              status: "starting",
+            }),
+        },
+      },
+    });
+    const store = createStore(bb);
+    const project = store.tasks.createProject({
+      name: "Blocked dispatch",
+      prefix: "BLK",
+      color: "blue",
+      linkedBbProjectId: "proj_bb",
+    });
+    const blocker = store.tasks.createTask({
+      projectId: project.id,
+      title: "Resolve prerequisite",
+      status: "todo",
+    });
+    const terminalBlocker = store.tasks.createTask({
+      projectId: project.id,
+      title: "Already resolved",
+      status: "done",
+    });
+    const task = store.tasks.createTask({
+      projectId: project.id,
+      title: "Begin blocked work",
+      status: "todo",
+    });
+    store.tasks.addTaskDependencies(task.id, [blocker.id, terminalBlocker.id]);
+    registerDelegation(bb, store);
+    const preset = createTestPreset(store);
+
+    await expect(
+      harness.callRpc("delegate", {
+        taskId: task.id,
+        presetId: preset.id,
+      }),
+    ).rejects.toMatchObject({
+      code: "handler_error",
+      message: `Task ${task.key} is blocked by unresolved task ${blocker.key}`,
+    });
+    expect(harness.sdk.callsTo("threads.spawn")).toEqual([]);
+    expect(store.tasks.listTaskThreads(task.id)).toEqual([]);
+    expect(store.tasks.listComments(task.id)).toEqual([]);
+    expect(harness.realtimeSignals).toEqual([]);
+
+    await expect(
+      harness.callRpc("delegate", {
+        taskId: task.id,
+        presetId: preset.id,
+        allowBlocked: true,
+      }),
+    ).resolves.toEqual({ threadId: "thr_blocked_override" });
+    expect(harness.sdk.callsTo("threads.spawn")[0]?.[0]).toMatchObject({
+      prompt: expect.stringContaining(`# ${task.key} · Begin blocked work`),
+    });
+    expect(store.tasks.getTask(task.id)?.status).toBe("in_progress");
+    expect(
+      store.tasks.listComments(task.id).map((comment) => comment.body),
+    ).toEqual([
+      "Status changed to In Progress · dispatched to Test worker",
+      "Dispatched to Test worker",
+    ]);
+    expect(harness.realtimeSignals).toEqual([
+      { channel: "threads:changed", payload: { taskId: task.id } },
+      {
+        channel: "tasks:changed",
+        payload: { taskId: task.id, projectId: project.id },
+      },
+      { channel: "comments:changed", payload: { taskId: task.id } },
+    ]);
+
+    await harness.dispose();
+  });
+
+  it("rejects blocked task-thread attachment by default and allows an explicit override", async () => {
+    const { bb, harness } = createFakePluginHost({
+      pluginId: "tasks",
+      sdk: {
+        threads: {
+          get: async () =>
+            makeThreadResponse({
+              id: "thr_existing",
+              title: "Existing worker",
+              status: "active",
+            }),
+        },
+      },
+    });
+    const store = createStore(bb);
+    const project = store.tasks.createProject({
+      name: "Blocked attachment",
+      prefix: "BAT",
+      color: "blue",
+    });
+    const blocker = store.tasks.createTask({
+      projectId: project.id,
+      title: "Direct blocker",
+      status: "in_progress",
+    });
+    const task = store.tasks.createTask({
+      projectId: project.id,
+      title: "Attach current worker",
+    });
+    store.tasks.addTaskDependencies(task.id, [blocker.id]);
+    registerDelegation(bb, store);
+
+    await expect(
+      harness.callRpc("taskThreadsAttach", {
+        taskId: task.id,
+        threadId: "thr_existing",
+      }),
+    ).rejects.toMatchObject({
+      code: "handler_error",
+      message: `Task ${task.key} is blocked by unresolved task ${blocker.key}`,
+    });
+    expect(harness.sdk.callsTo("threads.get")).toEqual([]);
+
+    await expect(
+      harness.callRpc("taskThreadsAttach", {
+        taskId: task.id,
+        threadId: "thr_existing",
+        allowBlocked: true,
+      }),
+    ).resolves.toEqual({ threadId: "thr_existing" });
+    expect(store.tasks.listTaskThreads(task.id)).toEqual([
+      expect.objectContaining({ threadId: "thr_existing" }),
+    ]);
+
+    await harness.dispose();
+  });
+
   it("self-attaches an existing thread through taskThreadsAttach", async () => {
     const { bb, harness } = createFakePluginHost({
       pluginId: "tasks",

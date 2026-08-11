@@ -16,6 +16,7 @@ import {
   type TasksChangedEvent,
   type ThreadsChangedEvent,
 } from "../shared/contract";
+import { blockedWorkMessage, unresolvedBlockerKeys } from "../shared/blocking";
 import { delegationRpcContract } from "./contract";
 
 const MAX_DELEGATED_THREAD_TITLE_LENGTH = 120;
@@ -156,6 +157,22 @@ function requirePreset(store: TasksStore, presetId: string): Preset {
   const preset = store.getPreset(presetId);
   if (!preset) throw new Error(`Preset not found: ${presetId}`);
   return preset;
+}
+
+function assertTaskCanBegin(
+  store: TasksStore,
+  task: Task,
+  allowBlocked: boolean,
+): void {
+  if (allowBlocked || !store.getTaskBlockingSummary(task.id).isBlocked) return;
+  const blockerKeys = unresolvedBlockerKeys(
+    store.listTaskDependencies(task.id).blockedBy.map((dependency) => ({
+      task: requireTask(store, dependency.blockerTaskId),
+    })),
+  );
+  if (blockerKeys.length > 0) {
+    throw new Error(blockedWorkMessage(task.key, blockerKeys));
+  }
 }
 
 function requireLinkedBbProject(project: Project): string {
@@ -318,6 +335,7 @@ export function handlers(
   return {
     async delegate(input) {
       const task = requireTask(store.tasks, input.taskId);
+      assertTaskCanBegin(store.tasks, task, input.allowBlocked);
       const project = requireProject(store.tasks, task.projectId);
       const linkedBbProjectId = requireLinkedBbProject(project);
       const preset = requirePreset(store.tasks, input.presetId);
@@ -404,6 +422,7 @@ export function handlers(
 
     async taskThreadsAttach(input) {
       const task = requireTask(store.tasks, input.taskId);
+      assertTaskCanBegin(store.tasks, task, input.allowBlocked);
       const thread = await bb.sdk.threads.get({ threadId: input.threadId });
       const title = (
         thread.title ??

@@ -79,8 +79,8 @@ target another enrolled machine.
 | `bb tasks comment <key-or-id>`                 | Add a Markdown comment from inline text or a file; optionally notify the latest responding task agent.                              |
 | `bb tasks attachment add\|get\|list\|remove`   | Add, fetch, list, or remove attachments. Referenced attachments require `remove --remove-references`.                               |
 | `bb tasks preset list\|create\|update\|delete` | Manage reusable agent execution presets.                                                                                            |
-| `bb tasks delegate <key>`                      | Start and attach a new agent thread using a preset.                                                                                 |
-| `bb tasks attach <key-or-id>`                  | Attach the current bb thread to a task when it was not delegated from Tasks.                                                        |
+| `bb tasks dispatch <key>`                      | Start and attach a new agent thread using a preset; blocked tasks require `--allow-blocked`.                                        |
+| `bb tasks attach <key-or-id>`                  | Attach the current bb thread; blocked tasks require `--allow-blocked`.                                                              |
 | `bb tasks threads <key>`                       | List the bb threads attached to a task.                                                                                             |
 | `bb tasks label create\|list\|delete`          | Manage project-scoped labels.                                                                                                       |
 | `bb tasks seed-demo --yes`                     | Create sample folders, projects, labels, tasks, and comments for evaluation.                                                        |
@@ -111,8 +111,11 @@ comments, preset instructions, and a report-back contract. Its installed Tasks
 skill tells it to inspect the task, leave substantive milestone comments,
 attach artifacts, and move completed work to `in_review`.
 
-If work begins outside the Delegate action, the agent can associate its current
-thread with `bb tasks attach KEY`.
+Blocked tasks are rejected by dispatch and thread attachment until their direct
+blockers are done or canceled. The UI offers **Continue anyway**; RPC callers
+send `allowBlocked: true`, and CLI callers pass `--allow-blocked` when beginning
+the work is deliberate. If work begins outside the Delegate action, the agent
+can associate its current thread with `bb tasks attach KEY`.
 
 ## Task mentions
 
