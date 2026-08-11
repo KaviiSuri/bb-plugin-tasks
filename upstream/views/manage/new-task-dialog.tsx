@@ -47,6 +47,7 @@ import { Button } from "@bb/shared-ui/button";
 import { Icon } from "@bb/shared-ui/icon";
 import { cn } from "@bb/shared-ui/lib/utils";
 import { CheckboxField, DEFAULT_COLOR } from "./shared.js";
+import { BlockerPicker, type BlockerPickerHandle } from "./blocker-picker.js";
 
 export const STATUS_LABELS: Record<TaskStatus, string> = {
   backlog: "Backlog",
@@ -105,6 +106,7 @@ export function NewTaskDialog({
     defaultParentTaskId ?? null,
   );
   const [parentPickerOpen, setParentPickerOpen] = useState(false);
+  const [blockerTaskIds, setBlockerTaskIds] = useState<string[]>([]);
   const [createMore, setCreateMore] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,6 +118,7 @@ export function NewTaskDialog({
   const [createdTask, setCreatedTask] = useState<Task | null>(null);
   const titleRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const blockerPickerRef = useRef<BlockerPickerHandle>(null);
 
   // Each open starts a fresh draft seeded from the invoking context.
   useEffect(() => {
@@ -128,6 +131,7 @@ export function NewTaskDialog({
     setLabelIds([]);
     setDueDate("");
     setParentTaskId(defaultParentTaskId ?? null);
+    setBlockerTaskIds([]);
     setLabelQuery("");
     setPendingFiles([]);
     setCreatedTask(null);
@@ -283,6 +287,12 @@ export function NewTaskDialog({
     setSubmitting(true);
     setError(null);
     try {
+      // Reconcile durable state immediately before submission. The server
+      // still validates inside its write transaction to cover the race after
+      // this read and before edge insertion.
+      const durableBlockerTaskIds =
+        (await blockerPickerRef.current?.revalidateSelection()) ??
+        blockerTaskIds;
       const result = await rpc.call("createTask", {
         projectId: effectiveProjectId,
         title: title.trim(),
@@ -292,6 +302,7 @@ export function NewTaskDialog({
         dueDate: dueDate === "" ? null : dueDate,
         parentTaskId,
         labelIds,
+        blockerTaskIds: durableBlockerTaskIds,
       });
       if (!result.ok) {
         setError(result.error.message);
@@ -334,6 +345,7 @@ export function NewTaskDialog({
         setTitle("");
         setDescription("");
         setLabelIds([]);
+        setBlockerTaskIds([]);
         setDueDate("");
         setPendingFiles([]);
         titleRef.current?.focus();
@@ -609,6 +621,13 @@ export function NewTaskDialog({
               </Command>
             </PopoverContent>
           </Popover>
+          <BlockerPicker
+            ref={blockerPickerRef}
+            projectId={effectiveProjectId}
+            selectedTaskIds={blockerTaskIds}
+            onSelectedTaskIdsChange={setBlockerTaskIds}
+            disabled={submitting}
+          />
           <input
             type="date"
             value={dueDate}

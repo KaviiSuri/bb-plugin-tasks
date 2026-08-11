@@ -9,6 +9,12 @@ import {
   type TaskSort,
 } from "../shared/pagination.js";
 import { presetPermissionModeSchema } from "../shared/contract.js";
+import {
+  BLOCKER_CANDIDATE_QUERY,
+  SELECTED_BLOCKER_QUERY,
+  type BlockerCandidateQueryParameters,
+  type SelectedBlockerQueryParameters,
+} from "./blocker-candidate-query.js";
 import type {
   Attachment,
   Comment,
@@ -26,6 +32,7 @@ import type {
   Preset,
   PresetEnvironmentKind,
   Project,
+  SearchBlockerCandidatesInput,
   SubtaskDoneCounts,
   Task,
   TaskDependency,
@@ -975,6 +982,51 @@ export function createTasksStore(db: PluginDatabase) {
     blockerTaskIds: readonly string[],
   ): TaskDependency[] {
     return removeTaskDependenciesTransaction(dependentTaskId, blockerTaskIds);
+  }
+
+  /**
+   * Search blocker options by key/title. Terminal tasks stay selectable but
+   * sort after every active task; within each status band the selected project
+   * sorts first. When an existing dependent is supplied, options that are
+   * self-links, duplicates, or would close a direct/transitive cycle are
+   * removed before the result limit is applied.
+   */
+  function searchBlockerCandidates(input: SearchBlockerCandidatesInput): {
+    candidates: Task[];
+    selected: Task[];
+  } {
+    requireProject(input.projectId);
+    const dependentTaskId = input.dependentTaskId ?? null;
+    if (dependentTaskId !== null) requireTask(dependentTaskId);
+
+    const selectedParameters: SelectedBlockerQueryParameters = {
+      dependentTaskId,
+      selectedTaskIdsJson: JSON.stringify(input.selectedTaskIds ?? []),
+    };
+    // Selected reconciliation is intentionally a separate indexed read. The
+    // candidate query excludes the requested IDs through json_each, while this
+    // query returns only endpoints still durable and graph-valid.
+    const selected = db
+      .prepare<SelectedBlockerQueryParameters, TaskRow>(SELECTED_BLOCKER_QUERY)
+      .all(selectedParameters)
+      .map(taskFromRow);
+
+    const query = input.query?.trim() ?? "";
+    const candidateParameters: BlockerCandidateQueryParameters = {
+      ...selectedParameters,
+      currentProjectId: input.projectId,
+      query,
+      search: `%${escapeLike(query)}%`,
+      candidateLimit: input.limit ?? 50,
+    };
+    const candidates = db
+      .prepare<
+        BlockerCandidateQueryParameters,
+        TaskRow
+      >(BLOCKER_CANDIDATE_QUERY)
+      .all(candidateParameters)
+      .map(taskFromRow);
+    return { candidates, selected };
   }
 
   function validateTaskParent(
@@ -2087,6 +2139,7 @@ export function createTasksStore(db: PluginDatabase) {
     listTaskDependencyCandidateIds,
     addTaskDependencies,
     removeTaskDependencies,
+    searchBlockerCandidates,
     createLabel,
     getLabel,
     listLabels,

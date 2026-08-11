@@ -131,6 +131,125 @@ describe("NewTaskDialog", () => {
     );
   });
 
+  it("selects cross-project/terminal blockers and prunes stale selection before create", async () => {
+    const createCalls: Array<Record<string, unknown>> = [];
+    const searchCalls: Array<Record<string, unknown>> = [];
+    const otherProject = {
+      ...project,
+      id: "01HZZZZZZZZZZZZZZZZZZZZZP2",
+      name: "Platform",
+      prefix: "PLAT",
+      color: "green",
+    };
+    const candidate = (
+      id: string,
+      key: string,
+      title: string,
+      candidateProject: typeof project,
+      status: Task["status"] = "todo",
+    ) => ({
+      task: {
+        ...createdTask({ title, status }),
+        id,
+        projectId: candidateProject.id,
+        key,
+        number: Number(key.split("-").at(-1)),
+        status,
+      },
+      project: candidateProject,
+    });
+    const candidates = [
+      candidate(
+        "01HZZZZZZZZZZZZZZZZZZZZZB1",
+        "TSK-6",
+        "Current active",
+        project,
+      ),
+      candidate(
+        "01HZZZZZZZZZZZZZZZZZZZZZB2",
+        "PLAT-1",
+        "Cross-project blocker",
+        otherProject,
+      ),
+      candidate(
+        "01HZZZZZZZZZZZZZZZZZZZZZB3",
+        "TSK-7",
+        "Resolved blocker",
+        project,
+        "done",
+      ),
+    ];
+    const durableIds = new Set(candidates.map((entry) => entry.task.id));
+    const slot = renderSlot(
+      app.navPanels[0]!,
+      { subPath: PROJECT_ID },
+      {
+        rpc: {
+          listProjects: () => ({ projects: [project, otherProject] }),
+          listFolders: () => ({ folders: [] }),
+          listPresets: () => ({ presets: [] }),
+          sidebarSummary: () => ({ projects: [] }),
+          listTasks: () => ({ tasks: [] }),
+          listLabels: () => ({ labels: [] }),
+          searchBlockerCandidates: (input: Record<string, unknown>) => {
+            searchCalls.push(input);
+            const selected = new Set((input.selectedTaskIds as string[]) ?? []);
+            const query = String(input.query ?? "").toLowerCase();
+            return {
+              candidates: candidates.filter(
+                (entry) =>
+                  durableIds.has(entry.task.id) &&
+                  !selected.has(entry.task.id) &&
+                  `${entry.task.key} ${entry.task.title}`
+                    .toLowerCase()
+                    .includes(query),
+              ),
+              selected: candidates.filter(
+                (entry) =>
+                  durableIds.has(entry.task.id) && selected.has(entry.task.id),
+              ),
+            };
+          },
+          createTask: (input: Record<string, unknown>) => {
+            createCalls.push(input);
+            return { ok: true, task: createdTask(input) };
+          },
+        },
+      },
+    );
+
+    fireEvent.click(await slot.findByRole("button", { name: /New task/ }));
+    fireEvent.change(await slot.findByLabelText("Task title"), {
+      target: { value: "Use blockers" },
+    });
+    fireEvent.click(slot.getByRole("button", { name: "Blocked by" }));
+    await slot.findByText("Other project · Platform");
+    await slot.findByText("Done / Canceled · Current project · Tasks Plugin");
+    expect(slot.queryByText(/^Blocks$/)).toBeNull();
+
+    fireEvent.change(slot.getByPlaceholderText("Search task keys and titles…"), {
+      target: { value: "PLAT" },
+    });
+    fireEvent.click(await slot.findByText("Cross-project blocker"));
+    await waitFor(() =>
+      expect(searchCalls.at(-1)).toMatchObject({
+        selectedTaskIds: ["01HZZZZZZZZZZZZZZZZZZZZZB2"],
+      }),
+    );
+    fireEvent.click(await slot.findByText("Resolved blocker"));
+    expect(slot.getAllByText("Done").length).toBeGreaterThan(0);
+
+    // Simulate deletion after selection without a realtime refresh. Submit's
+    // immediate reconciliation must drop it while the create transaction keeps
+    // its own validation for the remaining race window.
+    durableIds.delete("01HZZZZZZZZZZZZZZZZZZZZZB2");
+    fireEvent.click(slot.getByRole("button", { name: "Create task" }));
+    await waitFor(() => expect(createCalls).toHaveLength(1));
+    expect(createCalls[0]).toMatchObject({
+      blockerTaskIds: ["01HZZZZZZZZZZZZZZZZZZZZZB3"],
+    });
+  });
+
   it("keeps the dialog open and clears the draft when Create more is on", async () => {
     const createCalls: Array<Record<string, unknown>> = [];
     const slot = renderSlot(
