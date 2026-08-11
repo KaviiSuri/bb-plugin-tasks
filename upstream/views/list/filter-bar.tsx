@@ -1,7 +1,9 @@
 import type { ReactNode } from "react";
 import {
+  TASK_BLOCKING_FILTERS,
   TASK_PRIORITIES,
   TASK_STATUSES,
+  type TaskBlockingFilter,
   type TaskPriority,
   type TaskStatus,
 } from "../../shared/contract.js";
@@ -121,19 +123,56 @@ export interface ListFilterState {
   statuses: TaskStatus[];
   priorities: TaskPriority[];
   labelNames: string[];
+  blocking: TaskBlockingFilter;
 }
 
 export const EMPTY_FILTERS: ListFilterState = {
   statuses: [],
   priorities: [],
   labelNames: [],
+  blocking: "all",
 };
 
 export function hasActiveFilters(filters: ListFilterState): boolean {
   return (
     filters.statuses.length > 0 ||
     filters.priorities.length > 0 ||
-    filters.labelNames.length > 0
+    filters.labelNames.length > 0 ||
+    filters.blocking !== "all"
+  );
+}
+
+const BLOCKING_FILTER_LABELS: Record<TaskBlockingFilter, string> = {
+  all: "All",
+  blocked: "Blocked",
+  not_blocked: "Not blocked",
+};
+
+export function BlockingFilterChip({
+  value,
+  onChange,
+}: {
+  value: TaskBlockingFilter;
+  onChange: (value: TaskBlockingFilter) => void;
+}) {
+  return (
+    <FilterChip
+      icon="Lock"
+      label="Blocking"
+      selectedNames={value === "all" ? [] : [BLOCKING_FILTER_LABELS[value]]}
+    >
+      {TASK_BLOCKING_FILTERS.map((option) => (
+        <DropdownMenuCheckboxItem
+          key={option}
+          checked={value === option}
+          onCheckedChange={(checked) => {
+            if (checked === true) onChange(option);
+          }}
+        >
+          {BLOCKING_FILTER_LABELS[option]}
+        </DropdownMenuCheckboxItem>
+      ))}
+    </FilterChip>
   );
 }
 
@@ -223,6 +262,10 @@ export function ListFilterBar({
             </DropdownMenuCheckboxItem>
           ))}
         </FilterChip>
+        <BlockingFilterChip
+          value={filters.blocking}
+          onChange={(blocking) => onChange({ ...filters, blocking })}
+        />
         {showLabelChip ? (
           <FilterChip
             icon="ListTodo"

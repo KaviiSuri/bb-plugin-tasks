@@ -1,4 +1,5 @@
 import type { TaskSort } from "../shared/pagination.js";
+import type { TaskBlockingFilter } from "../shared/blocking.js";
 import type { PresetPermissionMode } from "../shared/contract.js";
 
 export const TASK_STATUSES = [
@@ -209,11 +210,17 @@ export interface UpdateTaskInput {
   parentTaskId?: string | null;
 }
 
+export interface TaskBlockingSummary {
+  isBlocked: boolean;
+  unresolvedBlockerCount: number;
+}
+
 export interface ListTasksFilters {
   projectId?: string;
   statuses?: readonly TaskStatus[];
   priorities?: readonly TaskPriority[];
   labelIds?: readonly string[];
+  blocking?: TaskBlockingFilter;
   activeOnly?: boolean;
   parentTaskId?: string | null;
   search?: string;

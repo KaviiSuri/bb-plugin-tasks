@@ -9,6 +9,7 @@ import {
   TASK_STATUSES,
   type Label,
   type Task,
+  type TaskBlockingFilter,
   type TaskStatus,
   type TaskThread,
 } from "../../shared/contract.js";
@@ -37,10 +38,12 @@ import {
   loadListPreference,
   storeListPreference,
 } from "../list/list-preference.js";
+import { BlockingFilterChip } from "../list/filter-bar.js";
+import { BlockedBadge } from "../blocking/badge.js";
 
 const DRAG_THRESHOLD_PX = 5;
 
-interface BoardCardMeta {
+export interface BoardCardMeta {
   workingThreads: TaskThread[];
   attachmentCount: number;
   subDone: number;
@@ -65,16 +68,20 @@ async function fetchBoard(
   rpc: TasksRpc,
   projectId: string,
   showSubtasks: boolean,
+  blocking: TaskBlockingFilter,
   parentTaskId?: string,
 ): Promise<BoardData> {
   // Parent scope asks the server for exactly this task's children; project
-  // scope fetches everything so sub-task progress can be tallied below.
-  const tasks = await listAllTasks(
-    rpc,
-    parentTaskId === undefined ? { projectId } : { projectId, parentTaskId },
-  );
-  // Sub-task progress below is still computed from every task, so the donut on
-  // a parent card stays correct whether or not its children are also carded.
+  // scope fetches everything so sub-task progress can be tallied below. Keep
+  // the unfiltered set for progress metadata while the card set composes the
+  // derived blocking filter with the same project/parent scope.
+  const scope =
+    parentTaskId === undefined ? { projectId } : { projectId, parentTaskId };
+  const allTasks = await listAllTasks(rpc, scope);
+  const tasks =
+    blocking === "all"
+      ? allTasks
+      : await listAllTasks(rpc, { ...scope, blocking });
   const topLevel =
     parentTaskId !== undefined || showSubtasks
       ? tasks
@@ -86,7 +93,7 @@ async function fetchBoard(
     () => [],
   );
   const subProgress = new Map<string, { done: number; total: number }>();
-  for (const task of tasks) {
+  for (const task of allTasks) {
     if (task.parentTaskId === null) continue;
     const entry = subProgress.get(task.parentTaskId) ?? { done: 0, total: 0 };
     entry.total += 1;
@@ -203,7 +210,7 @@ interface TaskCardProps {
   onClick?: () => void;
 }
 
-function TaskCard({
+export function TaskCard({
   task,
   labelsById,
   meta,
@@ -232,6 +239,7 @@ function TaskCard({
     >
       <div className="flex items-center gap-1.5 text-2xs text-muted-foreground">
         <span className="tabular-nums">{task.key}</span>
+        <BlockedBadge task={task} compact />
         <WorkingAgentsChip threads={meta.workingThreads} />
       </div>
       <div className="mt-1 line-clamp-2 text-sm leading-snug font-medium">
@@ -307,8 +315,13 @@ export function BoardView({ projectId, parentTaskId }: BoardViewProps) {
   const [showSubtasks, setShowSubtasksState] = useState(
     () => loadListPreference(preferenceScope).showSubtasks,
   );
+  const [blocking, setBlockingState] = useState<TaskBlockingFilter>(
+    () => loadListPreference(preferenceScope).filters.blocking,
+  );
   useEffect(() => {
-    setShowSubtasksState(loadListPreference(preferenceScope).showSubtasks);
+    const stored = loadListPreference(preferenceScope);
+    setShowSubtasksState(stored.showSubtasks);
+    setBlockingState(stored.filters.blocking);
   }, [preferenceScope]);
   const setShowSubtasks = (next: boolean) => {
     setShowSubtasksState(next);
@@ -317,11 +330,20 @@ export function BoardView({ projectId, parentTaskId }: BoardViewProps) {
       showSubtasks: next,
     });
   };
+  const setBlocking = (next: TaskBlockingFilter) => {
+    setBlockingState(next);
+    const stored = loadListPreference(preferenceScope);
+    storeListPreference(preferenceScope, {
+      ...stored,
+      filters: { ...stored.filters, blocking: next },
+    });
+  };
 
   const board = useTasksQuery(
-    (queryRpc) => fetchBoard(queryRpc, projectId, showSubtasks, parentTaskId),
+    (queryRpc) =>
+      fetchBoard(queryRpc, projectId, showSubtasks, blocking, parentTaskId),
     ["tasks:changed", "projects:changed", "threads:changed"],
-    [projectId, showSubtasks, parentTaskId ?? ""],
+    [projectId, showSubtasks, blocking, parentTaskId ?? ""],
   );
 
   // Local column state renders instantly on drop; realtime refetches replace
@@ -592,32 +614,33 @@ export function BoardView({ projectId, parentTaskId }: BoardViewProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {parentTaskId === undefined ? (
-      <div className="flex shrink-0 items-center justify-end border-b border-border-hairline px-3.5 py-1.5">
-        <button
-          type="button"
-          aria-pressed={showSubtasks}
-          title={showSubtasks ? "Hide sub-tasks" : "Show sub-tasks"}
-          onClick={() => setShowSubtasks(!showSubtasks)}
-          className={cn(
-            "flex h-6 shrink-0 items-center gap-1 rounded-md border px-2.5 text-xs max-md:pointer-coarse:h-8",
-            showSubtasks
-              ? "border-input bg-accent text-foreground"
-              : "border-dashed border-border text-muted-foreground hover:border-input hover:text-foreground",
-          )}
-        >
-          <Icon name="ListView" className="size-3" />
-          Sub-tasks
-        </button>
+      <div className="flex shrink-0 items-center justify-end gap-1.5 border-b border-border-hairline px-3.5 py-1.5">
+        <BlockingFilterChip value={blocking} onChange={setBlocking} />
+        {parentTaskId === undefined ? (
+          <button
+            type="button"
+            aria-pressed={showSubtasks}
+            title={showSubtasks ? "Hide sub-tasks" : "Show sub-tasks"}
+            onClick={() => setShowSubtasks(!showSubtasks)}
+            className={cn(
+              "flex h-6 shrink-0 items-center gap-1 rounded-md border px-2.5 text-xs max-md:pointer-coarse:h-8",
+              showSubtasks
+                ? "border-input bg-accent text-foreground"
+                : "border-dashed border-border text-muted-foreground hover:border-input hover:text-foreground",
+            )}
+          >
+            <Icon name="ListView" className="size-3" />
+            Sub-tasks
+          </button>
+        ) : null}
       </div>
-      ) : null}
-    <div
-      ref={boardRef}
-      className={cn(
-        "flex min-h-0 flex-1 items-start gap-3 overflow-x-auto p-4",
-        drag !== null && "cursor-grabbing",
-      )}
-    >
+      <div
+        ref={boardRef}
+        className={cn(
+          "flex min-h-0 flex-1 items-start gap-3 overflow-x-auto p-4",
+          drag !== null && "cursor-grabbing",
+        )}
+      >
       {visibleBoardStatuses(columns).map(renderColumn)}
       {drag && ghostTask ? (
         <div
@@ -636,16 +659,16 @@ export function BoardView({ projectId, parentTaskId }: BoardViewProps) {
           />
         </div>
       ) : null}
-      <NewTaskDialog
-        open={quickAddStatus !== null}
-        onOpenChange={(open) => {
-          if (!open) setQuickAddStatus(null);
-        }}
-        projectId={projectId}
-        defaultStatus={quickAddStatus ?? undefined}
-        defaultParentTaskId={parentTaskId}
-      />
-    </div>
+        <NewTaskDialog
+          open={quickAddStatus !== null}
+          onOpenChange={(open) => {
+            if (!open) setQuickAddStatus(null);
+          }}
+          projectId={projectId}
+          defaultStatus={quickAddStatus ?? undefined}
+          defaultParentTaskId={parentTaskId}
+        />
+      </div>
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { listAllTasks, useTasksQuery } from "../../shell/data.js";
 import type {
   Label,
   Task,
+  TaskBlockingFilter,
   TaskPriority,
   TaskStatus,
   TaskThread,
@@ -16,6 +17,7 @@ export interface ListTaskFilters {
    * how stale/deleted label names recover without silently showing all tasks.
    */
   labelIds: readonly string[] | null;
+  blocking: TaskBlockingFilter;
 }
 
 /**
@@ -45,6 +47,7 @@ export function useListTasks(
         ...(filters.labelIds !== null
           ? { labelIds: [...filters.labelIds] }
           : {}),
+        blocking: filters.blocking,
         activeOnly,
         ...(showSubtasks ? {} : { parentTaskId: null }),
       }),
@@ -55,6 +58,7 @@ export function useListTasks(
       filters.statuses.join(),
       filters.priorities.join(),
       filters.labelIds === null ? "" : `active:${filters.labelIds.join()}`,
+      filters.blocking,
       showSubtasks,
     ],
   );

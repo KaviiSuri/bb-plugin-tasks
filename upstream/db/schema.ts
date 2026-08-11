@@ -268,6 +268,16 @@ const MIGRATIONS = [
     CREATE INDEX idx_projects_blocker_candidates
       ON projects(name COLLATE NOCASE, id);
   `,
+  `
+    CREATE TRIGGER task_list_revision_dependencies_insert
+    AFTER INSERT ON task_dependencies BEGIN
+      UPDATE task_list_revision SET revision = revision + 1 WHERE id = 1;
+    END;
+    CREATE TRIGGER task_list_revision_dependencies_delete
+    AFTER DELETE ON task_dependencies BEGIN
+      UPDATE task_list_revision SET revision = revision + 1 WHERE id = 1;
+    END;
+  `,
 ] as const;
 
 export function initializeTasksSchema(db: PluginDatabase): void {

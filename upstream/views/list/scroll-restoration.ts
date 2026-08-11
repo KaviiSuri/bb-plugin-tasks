@@ -53,7 +53,7 @@ export function listScrollScopeKey(params: {
   const statuses = JSON.stringify([...params.filters.statuses].sort());
   const priorities = JSON.stringify([...params.filters.priorities].sort());
   const labels = JSON.stringify([...params.filters.labelNames].sort());
-  return `${list}|s=${statuses}|p=${priorities}|l=${labels}|sort=${params.sort}|sub=${params.showSubtasks ? 1 : 0}`;
+  return `${list}|s=${statuses}|p=${priorities}|l=${labels}|b=${params.filters.blocking}|sort=${params.sort}|sub=${params.showSubtasks ? 1 : 0}`;
 }
 
 export function readListScroll(scopeKey: string): number | null {

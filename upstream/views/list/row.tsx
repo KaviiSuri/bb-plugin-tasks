@@ -10,6 +10,7 @@ import { cn } from "@bb/shared-ui/lib/utils";
 import type { TaskRowMeta } from "./data.js";
 import { activeWorkLabel, formatDueDate, partitionLabels } from "./lib.js";
 import type { EditFn } from "./property-menus.js";
+import { BlockedBadge } from "../blocking/badge.js";
 import {
   isBareKey,
   PriorityEditor,
@@ -199,6 +200,7 @@ export function TaskRow({
           {task.title}
         </span>
         <span className="col-start-3 row-start-2 flex min-w-0 items-center gap-1.5 justify-self-end text-xs text-subtle-foreground @max-md:overflow-hidden @md:shrink-0">
+          <BlockedBadge task={task} />
           {meta ? <ActiveChip threads={meta.activeThreads} /> : null}
           <LabelChips task={task} labelsById={labelsById} />
           {task.dueDate !== null ? (

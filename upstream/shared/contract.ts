@@ -5,6 +5,12 @@ import {
   TASKS_PAGE_DEFAULT_LIMIT,
   TASKS_PAGE_MAX_LIMIT,
 } from "./pagination.js";
+import { TASK_BLOCKING_FILTERS } from "./blocking.js";
+
+export {
+  TASK_BLOCKING_FILTERS,
+  type TaskBlockingFilter,
+} from "./blocking.js";
 
 export const TASK_STATUSES = [
   "backlog",
@@ -76,6 +82,7 @@ const dueDateSchema = z
   }, "must be a valid calendar date in YYYY-MM-DD format");
 const taskStatusSchema = z.enum(TASK_STATUSES);
 const taskPrioritySchema = z.enum(TASK_PRIORITIES);
+const taskBlockingFilterSchema = z.enum(TASK_BLOCKING_FILTERS);
 const taskSortSchema = z.enum(TASK_SORTS);
 const threadSearchStatusSchema = z.enum([
   "idle",
@@ -123,6 +130,8 @@ export const taskSchema = z
     createdAt: z.string(),
     updatedAt: z.string(),
     labelIds: z.array(idSchema),
+    isBlocked: z.boolean(),
+    unresolvedBlockerCount: z.number().int().nonnegative(),
   })
   .strict();
 
@@ -617,6 +626,7 @@ export const tasksRpcContract = defineRpcContract({
         statuses: z.array(taskStatusSchema).optional(),
         priorities: z.array(taskPrioritySchema).optional(),
         labelIds: z.array(idSchema).optional(),
+        blocking: taskBlockingFilterSchema.default("all"),
         activeOnly: z.boolean().default(false),
         parentTaskId: idSchema.nullable().optional(),
         search: z.string().optional(),

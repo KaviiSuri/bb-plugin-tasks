@@ -1,5 +1,6 @@
 import type {
   Task,
+  TaskBlockingFilter,
   TaskPriority,
   TaskStatus,
 } from "../../shared/contract.js";
@@ -68,9 +69,14 @@ function fieldSettled(task: Task, field: EditField, edit: TaskEdit): boolean {
 /** Overlays a pending optimistic edit on top of the authoritative server task. */
 export function applyEdit(task: Task, edit: TaskEdit | undefined): Task {
   if (edit === undefined || !hasFields(edit)) return task;
+  const becomesTerminal =
+    edit.status === "done" || edit.status === "canceled";
   return {
     ...task,
     ...(edit.status !== undefined ? { status: edit.status } : {}),
+    ...(becomesTerminal
+      ? { isBlocked: false, unresolvedBlockerCount: 0 }
+      : {}),
     ...(edit.priority !== undefined ? { priority: edit.priority } : {}),
     ...(edit.dueDate !== undefined ? { dueDate: edit.dueDate } : {}),
     ...(edit.labelIds !== undefined ? { labelIds: edit.labelIds } : {}),
@@ -99,12 +105,15 @@ export function matchesFilters(
   statuses: readonly TaskStatus[],
   priorities: readonly TaskPriority[],
   labelIds: readonly string[],
+  blocking: TaskBlockingFilter = "all",
 ): boolean {
   return (
     (statuses.length === 0 || statuses.includes(task.status)) &&
     (priorities.length === 0 || priorities.includes(task.priority)) &&
     (labelIds.length === 0 ||
-      task.labelIds.some((id) => labelIds.includes(id)))
+      task.labelIds.some((id) => labelIds.includes(id))) &&
+    (blocking === "all" ||
+      (blocking === "blocked" ? task.isBlocked : !task.isBlocked))
   );
 }
 
