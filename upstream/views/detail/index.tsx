@@ -38,6 +38,7 @@ import { Skeleton } from "@bb/shared-ui/skeleton";
 export interface DetailViewProps {
   /** Task key like TSK-4 (not the ULID). */
   taskKey: string;
+  focusDependencies?: boolean;
 }
 
 const DESCRIPTION_SAVE_DELAY_MS = 800;
@@ -276,12 +277,28 @@ function DetailSkeleton() {
   );
 }
 
-function TaskDetail({ task }: { task: Task }) {
+function TaskDetail({
+  task,
+  focusDependencies = false,
+}: {
+  task: Task;
+  focusDependencies?: boolean;
+}) {
   const rpc = useTasksRpc();
   const navigation = useTasksNavigation();
   const { toasts, push, dismiss } = useDetailToasts();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const subtasksRef = useRef<HTMLElement>(null);
+  const dependenciesRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (!focusDependencies) return;
+    const frame = requestAnimationFrame(() => {
+      dependenciesRef.current?.scrollIntoView({ block: "center" });
+      dependenciesRef.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [task.id, focusDependencies]);
 
   // Local description draft: while the user types, the server still holds the
   // previous markdown, so passing the server value straight through would
@@ -599,6 +616,7 @@ function TaskDetail({ task }: { task: Task }) {
           />
 
           <DependenciesSection
+            ref={dependenciesRef}
             blockedBy={dependencies.data?.blockedBy ?? []}
             blocks={dependencies.data?.blocks ?? []}
             candidates={
@@ -653,7 +671,10 @@ function TaskDetail({ task }: { task: Task }) {
   );
 }
 
-export function DetailView({ taskKey }: DetailViewProps) {
+export function DetailView({
+  taskKey,
+  focusDependencies = false,
+}: DetailViewProps) {
   const query = useTasksQuery(
     async (rpc) => (await rpc.call("getTaskByKey", { taskKey })).task,
     ["tasks:changed"],
@@ -677,5 +698,5 @@ export function DetailView({ taskKey }: DetailViewProps) {
       </div>
     );
   }
-  return <TaskDetail task={query.data} />;
+  return <TaskDetail task={query.data} focusDependencies={focusDependencies} />;
 }

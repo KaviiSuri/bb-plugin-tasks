@@ -79,6 +79,7 @@ describe("tasks route grammar", () => {
       { kind: "active" },
       { kind: "manage" },
       { kind: "task", taskKey: "TSK-4" },
+      { kind: "task", taskKey: "TSK-4", focus: "dependencies" },
       { kind: "project", projectId: PROJECT_ID, view: "list" },
       { kind: "project", projectId: PROJECT_ID, view: "board" },
     ] as const;
@@ -92,6 +93,11 @@ describe("tasks route grammar", () => {
       view: "board",
     });
     expect(parseTasksRoute("")).toEqual({ kind: "all" });
+    expect(parseTasksRoute("task/TSK-4%3Ffocus%3Ddependencies")).toEqual({
+      kind: "task",
+      taskKey: "TSK-4",
+      focus: "dependencies",
+    });
   });
 });
 

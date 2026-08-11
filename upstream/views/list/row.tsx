@@ -16,6 +16,7 @@ import {
   PriorityEditor,
   StatusEditor,
   TaskContextMenu,
+  TaskContextMenuButton,
 } from "./property-menus.js";
 
 /**
@@ -121,6 +122,8 @@ export interface TaskRowProps {
   projectLabels: readonly Label[];
   onEdit: EditFn;
   onOpen: () => void;
+  onAddBlocker: (task: Task) => void;
+  onManageDependencies: (task: Task) => void;
   /** A mutation for this row is in flight. */
   pending: boolean;
 }
@@ -142,14 +145,23 @@ export function TaskRow({
   projectLabels,
   onEdit,
   onOpen,
+  onAddBlocker,
+  onManageDependencies,
   pending,
 }: TaskRowProps) {
   const [openMenu, setOpenMenu] = useState<"status" | "priority" | null>(null);
 
   return (
-    <TaskContextMenu task={task} onEdit={onEdit} projectLabels={projectLabels}>
+    <TaskContextMenu
+      task={task}
+      onEdit={onEdit}
+      projectLabels={projectLabels}
+      onAddBlocker={onAddBlocker}
+      onManageDependencies={onManageDependencies}
+    >
       <div
         data-task-key={task.key}
+        data-task-context-trigger
         aria-busy={pending || undefined}
         className={cn(
           // Narrow containers get a two-line hierarchy: status + full-width
@@ -217,6 +229,9 @@ export function TaskRow({
               style={{ backgroundColor: project.color }}
             />
           ) : null}
+        </span>
+        <span className="col-start-3 row-start-1 ml-auto @md:static">
+          <TaskContextMenuButton taskKey={task.key} />
         </span>
       </div>
     </TaskContextMenu>

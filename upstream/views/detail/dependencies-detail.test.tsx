@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadPluginApp, renderSlot } from "@bb/plugin-sdk/testing/app";
 
 if (!globalThis.ResizeObserver) {
@@ -117,6 +117,19 @@ function rpc(mutations: Array<{ method: string; input: unknown }>) {
 }
 
 describe("task detail dependencies", () => {
+  it("reveals and focuses the dependency section from the canonical focused route", async () => {
+    const scrollIntoView = vi.fn();
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    const slot = renderSlot(
+      app.navPanels[0]!,
+      { subPath: "task/ONE-1?focus=dependencies" },
+      { rpc: rpc([]) },
+    );
+    const section = await slot.findByRole("region", { name: "Dependencies" });
+    await waitFor(() => expect(document.activeElement).toBe(section));
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "center" });
+  });
+
   it("mounts the responsive authoritative section, presents context, filters cycles, mutates, and navigates", async () => {
     const mutations: Array<{ method: string; input: unknown }> = [];
     const slot = renderSlot(

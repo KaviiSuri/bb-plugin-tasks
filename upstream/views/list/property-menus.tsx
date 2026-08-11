@@ -289,11 +289,15 @@ export function TaskContextMenu({
   task,
   onEdit,
   projectLabels,
+  onAddBlocker,
+  onManageDependencies,
   children,
 }: {
   task: Task;
   onEdit: EditFn;
   projectLabels: readonly Label[];
+  onAddBlocker: (task: Task) => void;
+  onManageDependencies: (task: Task) => void;
   children: ReactNode;
 }) {
   const toggleLabel = (labelId: string) => {
@@ -426,7 +430,47 @@ export function TaskContextMenu({
             </ContextMenuSubContent>
           </ContextMenuSub>
         ) : null}
+
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => onAddBlocker(task)}>
+          <Icon name="Plus" className="size-3.5" />
+          <span>Add blocker…</span>
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => onManageDependencies(task)}>
+          <Icon name="GitBranch" className="size-3.5" />
+          <span>Manage dependencies…</span>
+        </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
+  );
+}
+
+/** Explicit context-menu affordance for keyboard and coarse pointers. */
+export function TaskContextMenuButton({ taskKey }: { taskKey: string }) {
+  return (
+    <button
+      type="button"
+      aria-label={`More actions for ${taskKey}`}
+      className="z-20 flex size-7 shrink-0 items-center justify-center rounded-md bg-card text-muted-foreground opacity-0 hover:bg-state-hover hover:text-foreground focus-visible:opacity-100 pointer-coarse:opacity-100"
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const trigger = event.currentTarget.closest<HTMLElement>(
+          "[data-task-context-trigger]",
+        );
+        const rect = event.currentTarget.getBoundingClientRect();
+        trigger?.dispatchEvent(
+          new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true,
+            clientX: rect.left,
+            clientY: rect.bottom,
+          }),
+        );
+      }}
+    >
+      <Icon name="MoreHorizontal" className="size-4" />
+    </button>
   );
 }

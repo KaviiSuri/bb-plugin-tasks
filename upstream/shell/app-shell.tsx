@@ -168,7 +168,12 @@ function RouteOutlet({
     case "manage":
       return <ManagePanel />;
     case "task":
-      return <DetailView taskKey={route.taskKey} />;
+      return (
+        <DetailView
+          taskKey={route.taskKey}
+          focusDependencies={route.focus === "dependencies"}
+        />
+      );
     case "project":
       return route.view === "board" && boardUsable ? (
         <BoardView projectId={route.projectId} />

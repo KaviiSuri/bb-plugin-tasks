@@ -23,6 +23,7 @@ vi.mock("../list/property-menus.js", () => ({
   PriorityEditor: () => <span data-testid="priority" />,
   StatusEditor: () => <span data-testid="status" />,
   TaskContextMenu: ({ children }: { children: ReactNode }) => children,
+  TaskContextMenuButton: () => null,
 }));
 
 const task: Task = {
@@ -73,6 +74,8 @@ describe("blocking badges on task surfaces", () => {
         projectLabels={[]}
         onEdit={vi.fn()}
         onOpen={vi.fn()}
+        onAddBlocker={vi.fn()}
+        onManageDependencies={vi.fn()}
         pending={false}
       />,
     );
