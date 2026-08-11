@@ -11,7 +11,11 @@ export type TasksRoute =
   | { kind: "active" }
   | { kind: "manage" }
   | { kind: "project"; projectId: string; view: TaskViewMode }
-  | { kind: "task"; taskKey: string };
+  | {
+      kind: "task";
+      taskKey: string;
+      focus?: "dependencies";
+    };
 
 /**
  * subPath grammar (the trailing route below /plugins/tasks/tasks):
@@ -20,6 +24,7 @@ export type TasksRoute =
  *   "active"                → tasks with agents working
  *   "manage"                → manage panel (labels, presets, folders)
  *   "task/<taskKey>"        → task detail (e.g. task/TSK-4)
+ *   "task/<taskKey>?focus=dependencies" → focused dependency section
  *   "<projectId>"           → project list view
  *   "<projectId>?view=board" → project board view
  */
@@ -45,7 +50,11 @@ export function parseTasksRoute(rawSubPath: string): TasksRoute {
   if (head === "manage") return { kind: "manage" };
   if (head === "task") {
     const taskKey = segments[1];
-    if (taskKey !== undefined) return { kind: "task", taskKey };
+    if (taskKey !== undefined) {
+      return new URLSearchParams(query).get("focus") === "dependencies"
+        ? { kind: "task", taskKey, focus: "dependencies" }
+        : { kind: "task", taskKey };
+    }
     return { kind: "all" };
   }
   const view = new URLSearchParams(query).get("view");
@@ -65,7 +74,9 @@ export function tasksRouteToSubPath(route: TasksRoute): string {
     case "manage":
       return "manage";
     case "task":
-      return `task/${route.taskKey}`;
+      return route.focus === "dependencies"
+        ? `task/${route.taskKey}?focus=dependencies`
+        : `task/${route.taskKey}`;
     case "project":
       return route.view === "board"
         ? `${route.projectId}?view=board`

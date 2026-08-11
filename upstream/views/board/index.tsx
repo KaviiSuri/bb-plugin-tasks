@@ -1,7 +1,9 @@
 import {
+  forwardRef,
   useEffect,
   useRef,
   useState,
+  type HTMLAttributes,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
@@ -42,6 +44,12 @@ import { BlockingFilterChip } from "../list/filter-bar.js";
 import { BlockedBadge } from "../blocking/badge.js";
 import { unresolvedBlockerKeys } from "../../shared/blocking.js";
 import { BlockedWorkWarningDialog } from "../blocking/warning-dialog.js";
+import {
+  TaskContextMenu,
+  TaskContextMenuButton,
+  type EditFn,
+} from "../list/property-menus.js";
+import { QuickAddBlockerDialog } from "../manage/quick-add-blocker-dialog.js";
 
 const DRAG_THRESHOLD_PX = 5;
 
@@ -209,7 +217,10 @@ function WorkingAgentsChip({ threads }: { threads: TaskThread[] }) {
   );
 }
 
-interface TaskCardProps {
+interface TaskCardProps extends Omit<
+  HTMLAttributes<HTMLDivElement>,
+  "children" | "onClick" | "onPointerDown"
+> {
   task: Task;
   labelsById: Map<string, Label>;
   meta: BoardCardMeta;
@@ -218,75 +229,94 @@ interface TaskCardProps {
   cardRef?: (element: HTMLDivElement | null) => void;
   onPointerDown?: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onClick?: () => void;
+  contextMenuButton?: ReactNode;
 }
 
-export function TaskCard({
-  task,
-  labelsById,
-  meta,
-  ghost = false,
-  dragging = false,
-  cardRef,
-  onPointerDown,
-  onClick,
-}: TaskCardProps) {
-  const labels = task.labelIds
-    .map((labelId) => labelsById.get(labelId))
-    .filter((label): label is Label => label !== undefined);
-  return (
-    <div
-      ref={cardRef}
-      data-task-key={task.key}
-      onPointerDown={onPointerDown}
-      onClick={onClick}
-      className={cn(
-        "shrink-0 rounded-lg border border-border bg-card px-2.5 py-2 shadow-2xs select-none",
-        ghost
-          ? "rotate-2 shadow-md"
-          : "cursor-pointer touch-none hover:border-input",
-        dragging && "opacity-40",
-      )}
-    >
-      <div className="flex items-center gap-1.5 text-2xs text-muted-foreground">
-        <span className="tabular-nums">{task.key}</span>
-        <BlockedBadge task={task} compact />
-        <WorkingAgentsChip threads={meta.workingThreads} />
-      </div>
-      <div className="mt-1 line-clamp-2 text-sm leading-snug font-medium">
-        {task.title}
-      </div>
-      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-        <PriorityIcon priority={task.priority} />
-        {labels.map((label) => (
-          <span
-            key={label.id}
-            className="flex items-center gap-1 rounded-md border border-border px-1.5 text-2xs text-muted-foreground"
-          >
+export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
+  function TaskCard(
+    {
+      task,
+      labelsById,
+      meta,
+      ghost = false,
+      dragging = false,
+      cardRef,
+      onPointerDown,
+      onClick,
+      contextMenuButton,
+      className,
+      ...triggerProps
+    },
+    forwardedRef,
+  ) {
+    const labels = task.labelIds
+      .map((labelId) => labelsById.get(labelId))
+      .filter((label): label is Label => label !== undefined);
+    return (
+      <div
+        {...triggerProps}
+        ref={(element) => {
+          cardRef?.(element);
+          if (typeof forwardedRef === "function") forwardedRef(element);
+          else if (forwardedRef) forwardedRef.current = element;
+        }}
+        data-task-key={task.key}
+        data-task-context-trigger
+        onPointerDown={onPointerDown}
+        onClick={onClick}
+        className={cn(
+          "relative shrink-0 rounded-lg border border-border bg-card px-2.5 py-2 shadow-2xs select-none",
+          ghost
+            ? "rotate-2 shadow-md"
+            : "cursor-pointer touch-none hover:border-input",
+          dragging && "opacity-40",
+          className,
+        )}
+      >
+        <div className="flex items-center gap-1.5 pr-6 text-2xs text-muted-foreground">
+          <span className="tabular-nums">{task.key}</span>
+          <BlockedBadge task={task} compact />
+          <WorkingAgentsChip threads={meta.workingThreads} />
+        </div>
+        {contextMenuButton ? (
+          <span className="absolute right-1 top-1">{contextMenuButton}</span>
+        ) : null}
+        <div className="mt-1 line-clamp-2 text-sm leading-snug font-medium">
+          {task.title}
+        </div>
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          <PriorityIcon priority={task.priority} />
+          {labels.map((label) => (
             <span
-              aria-hidden
-              className="size-1.5 rounded-full"
-              style={{ backgroundColor: label.color }}
+              key={label.id}
+              className="flex items-center gap-1 rounded-md border border-border px-1.5 text-2xs text-muted-foreground"
+            >
+              <span
+                aria-hidden
+                className="size-1.5 rounded-full"
+                style={{ backgroundColor: label.color }}
+              />
+              {label.name}
+            </span>
+          ))}
+          {meta.subTotal > 0 ? (
+            <span className="flex items-center gap-0.5 text-2xs text-muted-foreground">
+              <Icon name="GitBranch" className="size-3" />
+              {meta.subDone}/{meta.subTotal}
+            </span>
+          ) : null}
+          {meta.attachmentCount > 0 ? (
+            <Icon
+              name="Paperclip"
+              className="size-3 text-muted-foreground"
+              aria-label={`${meta.attachmentCount} attachments`}
             />
-            {label.name}
-          </span>
-        ))}
-        {meta.subTotal > 0 ? (
-          <span className="flex items-center gap-0.5 text-2xs text-muted-foreground">
-            <Icon name="GitBranch" className="size-3" />
-            {meta.subDone}/{meta.subTotal}
-          </span>
-        ) : null}
-        {meta.attachmentCount > 0 ? (
-          <Icon
-            name="Paperclip"
-            className="size-3 text-muted-foreground"
-            aria-label={`${meta.attachmentCount} attachments`}
-          />
-        ) : null}
+          ) : null}
+        </div>
       </div>
-    </div>
-  );
-}
+    );
+  },
+);
 
 function BoardSkeleton() {
   return (
@@ -372,6 +402,7 @@ export function BoardView({ projectId, parentTaskId }: BoardViewProps) {
   const [pendingBlockedMove, setPendingBlockedMove] =
     useState<PendingBlockedMove | null>(null);
   const [quickAddStatus, setQuickAddStatus] = useState<TaskStatus | null>(null);
+  const [blockerTask, setBlockerTask] = useState<Task | null>(null);
   const boardRef = useRef<HTMLDivElement | null>(null);
   const columnRefs = useRef(new Map<TaskStatus, HTMLDivElement>());
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
@@ -561,6 +592,14 @@ export function BoardView({ projectId, parentTaskId }: BoardViewProps) {
     navigation.go({ kind: "task", taskKey: task.key });
   };
 
+  const editTask: EditFn = (task, patch) => {
+    void rpc
+      .call("updateTask", { taskId: task.id, ...patch })
+      .then((result) => {
+        if (!result.ok) board.refresh();
+      }, board.refresh);
+  };
+
   if (columns === undefined) {
     if (board.error) {
       return (
@@ -605,19 +644,36 @@ export function BoardView({ projectId, parentTaskId }: BoardViewProps) {
     for (const task of cards) {
       if (task.id === indicatorBeforeTaskId) children.push(indicator);
       children.push(
-        <TaskCard
+        <TaskContextMenu
           key={task.id}
           task={task}
-          labelsById={labelsById}
-          meta={metaByTaskId.get(task.id) ?? EMPTY_META}
-          dragging={drag?.taskId === task.id}
-          cardRef={(element) => {
-            if (element) cardRefs.current.set(task.id, element);
-            else cardRefs.current.delete(task.id);
-          }}
-          onPointerDown={(event) => handleCardPointerDown(event, task)}
-          onClick={() => openTask(task)}
-        />,
+          onEdit={editTask}
+          projectLabels={Array.from(labelsById.values()).filter(
+            (label) => label.projectId === task.projectId,
+          )}
+          onAddBlocker={setBlockerTask}
+          onManageDependencies={(selected) =>
+            navigation.go({
+              kind: "task",
+              taskKey: selected.key,
+              focus: "dependencies",
+            })
+          }
+        >
+          <TaskCard
+            task={task}
+            labelsById={labelsById}
+            meta={metaByTaskId.get(task.id) ?? EMPTY_META}
+            dragging={drag?.taskId === task.id}
+            cardRef={(element) => {
+              if (element) cardRefs.current.set(task.id, element);
+              else cardRefs.current.delete(task.id);
+            }}
+            onPointerDown={(event) => handleCardPointerDown(event, task)}
+            onClick={() => openTask(task)}
+            contextMenuButton={<TaskContextMenuButton taskKey={task.key} />}
+          />
+        </TaskContextMenu>,
       );
     }
     if (indicatorBeforeTaskId === null) children.push(indicator);
@@ -730,6 +786,13 @@ export function BoardView({ projectId, parentTaskId }: BoardViewProps) {
           projectId={projectId}
           defaultStatus={quickAddStatus ?? undefined}
           defaultParentTaskId={parentTaskId}
+        />
+        <QuickAddBlockerDialog
+          task={blockerTask}
+          open={blockerTask !== null}
+          onOpenChange={(open) => {
+            if (!open) setBlockerTask(null);
+          }}
         />
       </div>
     </div>

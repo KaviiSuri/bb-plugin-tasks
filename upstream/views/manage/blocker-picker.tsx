@@ -33,9 +33,13 @@ export interface BlockerPickerHandle {
 
 interface BlockerPickerProps {
   projectId: string | null;
+  dependentTaskId?: string | null;
   selectedTaskIds: string[];
   onSelectedTaskIdsChange: (taskIds: string[]) => void;
+  onSelectTask?: (candidate: DependencyTask) => void;
   disabled?: boolean;
+  /** Render the shared searchable picker directly inside another overlay. */
+  embedded?: boolean;
 }
 
 function sameIds(left: readonly string[], right: readonly string[]): boolean {
@@ -55,7 +59,15 @@ export const BlockerPicker = forwardRef<
   BlockerPickerHandle,
   BlockerPickerProps
 >(function BlockerPicker(
-  { projectId, selectedTaskIds, onSelectedTaskIdsChange, disabled = false },
+  {
+    projectId,
+    dependentTaskId = null,
+    selectedTaskIds,
+    onSelectedTaskIdsChange,
+    onSelectTask,
+    disabled = false,
+    embedded = false,
+  },
   ref,
 ) {
   const rpc = useTasksRpc();
@@ -69,18 +81,22 @@ export const BlockerPicker = forwardRef<
   const search = useTasksQuery(
     async (client) => {
       const requestedSelectedTaskIds = [...selectedTaskIds];
-      if (projectId === null || (!open && selectedTaskIds.length === 0)) {
+      if (
+        projectId === null ||
+        (!embedded && !open && selectedTaskIds.length === 0)
+      ) {
         return { candidates: [], selected: [], requestedSelectedTaskIds };
       }
       const result = await client.call("searchBlockerCandidates", {
         projectId,
-        query: open ? query : "",
+        query: open || embedded ? query : "",
+        ...(dependentTaskId === null ? {} : { dependentTaskId }),
         selectedTaskIds,
       });
       return { ...result, requestedSelectedTaskIds };
     },
     ["tasks:changed"],
-    [projectId, open, query, selectedTaskIds],
+    [projectId, dependentTaskId, open, query, selectedTaskIds, embedded],
   );
 
   const reconcileSelection = useCallback(
@@ -117,13 +133,14 @@ export const BlockerPicker = forwardRef<
         const result = await rpc.call("searchBlockerCandidates", {
           projectId,
           query: "",
+          ...(dependentTaskId === null ? {} : { dependentTaskId }),
           selectedTaskIds,
           limit: 1,
         });
         return reconcileSelection(result.selected);
       },
     }),
-    [projectId, rpc, selectedTaskIds, reconcileSelection],
+    [projectId, dependentTaskId, rpc, selectedTaskIds, reconcileSelection],
   );
 
   const groups = useMemo(
@@ -133,6 +150,126 @@ export const BlockerPicker = forwardRef<
         : groupBlockerCandidates(search.data?.candidates ?? [], projectId),
     [projectId, search.data, search.isLoading],
   );
+
+  const picker = (
+    <>
+      {selectedItems.length > 0 ? (
+        <div className="border-b border-border-hairline p-2">
+          <p className="mb-1 px-1 text-2xs font-medium text-muted-foreground">
+            Selected blockers
+          </p>
+          <div className="flex flex-wrap gap-1">
+            {selectedItems.map((candidate) => {
+              const status = terminalLabel(candidate);
+              return (
+                <button
+                  key={candidate.task.id}
+                  type="button"
+                  disabled={disabled}
+                  aria-label={`Remove blocker ${candidate.task.key}`}
+                  className="flex max-w-full items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs hover:bg-state-hover disabled:opacity-50"
+                  onClick={() => {
+                    setSelectedItems((current) =>
+                      current.filter(
+                        (item) => item.task.id !== candidate.task.id,
+                      ),
+                    );
+                    onSelectedTaskIdsChange(
+                      selectedTaskIds.filter((id) => id !== candidate.task.id),
+                    );
+                  }}
+                >
+                  <span className="font-medium">{candidate.task.key}</span>
+                  <span className="max-w-40 truncate text-muted-foreground">
+                    {candidate.task.title}
+                  </span>
+                  {status ? (
+                    <span className="rounded bg-background px-1 text-2xs text-muted-foreground">
+                      {status}
+                    </span>
+                  ) : null}
+                  <Icon name="X" className="size-3" />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+      <Command
+        shouldFilter={false}
+        className={embedded ? "min-w-0 max-w-full" : undefined}
+      >
+        <CommandInput
+          placeholder="Search task keys and titles…"
+          value={query}
+          onValueChange={setQuery}
+        />
+        <CommandList>
+          <CommandEmpty>
+            {search.isLoading
+              ? "Searching tasks…"
+              : (search.error ?? "No valid blockers found.")}
+          </CommandEmpty>
+          {groups.map((group) => (
+            <CommandGroup key={group.key} heading={group.label}>
+              {group.candidates.map((candidate) => {
+                const status = isTerminalTaskStatus(candidate.task.status)
+                  ? terminalLabel(candidate)
+                  : null;
+                return (
+                  <CommandItem
+                    key={candidate.task.id}
+                    value={candidate.task.id}
+                    disabled={disabled}
+                    onSelect={() => {
+                      if (onSelectTask) {
+                        onSelectTask(candidate);
+                      } else {
+                        setSelectedItems((current) => [...current, candidate]);
+                        onSelectedTaskIdsChange([
+                          ...selectedTaskIds,
+                          candidate.task.id,
+                        ]);
+                        setQuery("");
+                      }
+                    }}
+                  >
+                    <span
+                      aria-hidden
+                      className="size-2.5 shrink-0 rounded-sm"
+                      style={{ backgroundColor: candidate.project.color }}
+                    />
+                    <span className="shrink-0 font-medium text-muted-foreground">
+                      {candidate.task.key}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">
+                      {candidate.task.title}
+                    </span>
+                    {status ? (
+                      <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-2xs text-muted-foreground">
+                        {status}
+                      </span>
+                    ) : null}
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          ))}
+        </CommandList>
+      </Command>
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div
+        data-embedded-blocker-picker
+        className="min-h-0 w-full min-w-0 max-w-full overflow-hidden p-2"
+      >
+        {picker}
+      </div>
+    );
+  }
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -157,104 +294,7 @@ export const BlockerPicker = forwardRef<
         align="start"
         mobileTitle="Blocked by"
       >
-        {selectedItems.length > 0 ? (
-          <div className="border-b border-border-hairline p-2">
-            <p className="mb-1 px-1 text-2xs font-medium text-muted-foreground">
-              Selected blockers
-            </p>
-            <div className="flex flex-wrap gap-1">
-              {selectedItems.map((candidate) => {
-                const status = terminalLabel(candidate);
-                return (
-                  <button
-                    key={candidate.task.id}
-                    type="button"
-                    disabled={disabled}
-                    aria-label={`Remove blocker ${candidate.task.key}`}
-                    className="flex max-w-full items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs hover:bg-state-hover disabled:opacity-50"
-                    onClick={() => {
-                      setSelectedItems((current) =>
-                        current.filter(
-                          (item) => item.task.id !== candidate.task.id,
-                        ),
-                      );
-                      onSelectedTaskIdsChange(
-                        selectedTaskIds.filter(
-                          (id) => id !== candidate.task.id,
-                        ),
-                      );
-                    }}
-                  >
-                    <span className="font-medium">{candidate.task.key}</span>
-                    <span className="max-w-40 truncate text-muted-foreground">
-                      {candidate.task.title}
-                    </span>
-                    {status ? (
-                      <span className="rounded bg-background px-1 text-2xs text-muted-foreground">
-                        {status}
-                      </span>
-                    ) : null}
-                    <Icon name="X" className="size-3" />
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
-        <Command shouldFilter={false}>
-          <CommandInput
-            placeholder="Search task keys and titles…"
-            value={query}
-            onValueChange={setQuery}
-          />
-          <CommandList>
-            <CommandEmpty>
-              {search.isLoading
-                ? "Searching tasks…"
-                : (search.error ?? "No valid blockers found.")}
-            </CommandEmpty>
-            {groups.map((group) => (
-              <CommandGroup key={group.key} heading={group.label}>
-                {group.candidates.map((candidate) => {
-                  const status = isTerminalTaskStatus(candidate.task.status)
-                    ? terminalLabel(candidate)
-                    : null;
-                  return (
-                    <CommandItem
-                      key={candidate.task.id}
-                      value={candidate.task.id}
-                      onSelect={() => {
-                        setSelectedItems((current) => [...current, candidate]);
-                        onSelectedTaskIdsChange([
-                          ...selectedTaskIds,
-                          candidate.task.id,
-                        ]);
-                        setQuery("");
-                      }}
-                    >
-                      <span
-                        aria-hidden
-                        className="size-2.5 shrink-0 rounded-sm"
-                        style={{ backgroundColor: candidate.project.color }}
-                      />
-                      <span className="shrink-0 font-medium text-muted-foreground">
-                        {candidate.task.key}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate">
-                        {candidate.task.title}
-                      </span>
-                      {status ? (
-                        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-2xs text-muted-foreground">
-                          {status}
-                        </span>
-                      ) : null}
-                    </CommandItem>
-                  );
-                })}
-              </CommandGroup>
-            ))}
-          </CommandList>
-        </Command>
+        {picker}
       </PopoverContent>
     </Popover>
   );

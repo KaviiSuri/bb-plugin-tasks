@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { forwardRef, useState } from "react";
 import type {
   DependencyCandidates,
   DependencyTask,
@@ -156,25 +156,29 @@ function DependencyCollection({
   );
 }
 
-export function DependenciesSection({
-  blockedBy,
-  blocks,
-  candidates,
-  busy,
-  onAdd,
-  onRemove,
-}: {
-  blockedBy: DependencyTask[];
-  blocks: DependencyTask[];
-  candidates: DependencyCandidates;
-  busy: boolean;
-  onAdd: (direction: DependencyDirection, candidate: DependencyTask) => void;
-  onRemove: (direction: DependencyDirection, candidate: DependencyTask) => void;
-}) {
+export const DependenciesSection = forwardRef<
+  HTMLElement,
+  {
+    blockedBy: DependencyTask[];
+    blocks: DependencyTask[];
+    candidates: DependencyCandidates;
+    busy: boolean;
+    onAdd: (direction: DependencyDirection, candidate: DependencyTask) => void;
+    onRemove: (
+      direction: DependencyDirection,
+      candidate: DependencyTask,
+    ) => void;
+  }
+>(function DependenciesSection(
+  { blockedBy, blocks, candidates, busy, onAdd, onRemove },
+  ref,
+) {
   return (
     <section
+      ref={ref}
+      tabIndex={-1}
       aria-label="Dependencies"
-      className="mt-6 grid gap-5 border-t border-border-hairline pt-5 @[36rem]:grid-cols-2"
+      className="mt-6 grid gap-5 border-t border-border-hairline pt-5 outline-none focus-visible:ring-1 focus-visible:ring-ring @[36rem]:grid-cols-2"
     >
       <h2 className="text-sm font-semibold @[36rem]:col-span-2">
         Dependencies
@@ -199,4 +203,4 @@ export function DependenciesSection({
       />
     </section>
   );
-}
+});

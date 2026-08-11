@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Label } from "../../shared/contract.js";
+import type { Label, Task } from "../../shared/contract.js";
 import { useProjects } from "../../shell/data.js";
 import { useTasksNavigation } from "../../shell/routes.js";
 import { NewTaskDialog } from "../manage/index.js";
+import { QuickAddBlockerDialog } from "../manage/quick-add-blocker-dialog.js";
 import { DetailToasts, useDetailToasts } from "../detail/toast.js";
 import { Button } from "@bb/shared-ui/button";
 import { Icon } from "@bb/shared-ui/icon";
@@ -127,6 +128,7 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
     });
   };
   const [newTaskOpen, setNewTaskOpen] = useState(false);
+  const [blockerTask, setBlockerTask] = useState<Task | null>(null);
 
   const labelProjectIds = useMemo(
     () =>
@@ -150,12 +152,17 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
     return selectedLabelIds(labelOptions, filters.labelNames);
   }, [filters.labelNames, labelOptions, labels.data]);
 
-  const tasksQuery = useListTasks(projectId, activeOnly, {
-    statuses: filters.statuses,
-    priorities: filters.priorities,
-    labelIds,
-    blocking: filters.blocking,
-  }, showSubtasks);
+  const tasksQuery = useListTasks(
+    projectId,
+    activeOnly,
+    {
+      statuses: filters.statuses,
+      priorities: filters.priorities,
+      labelIds,
+      blocking: filters.blocking,
+    },
+    showSubtasks,
+  );
   const meta = useTaskListMeta(tasksQuery.data);
   const edits = useListTaskEdits(tasksQuery.data, (message) =>
     push("error", message),
@@ -325,6 +332,14 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
             projectLabels={labelsByProject.get(task.projectId) ?? []}
             onEdit={edits.edit}
             onOpen={() => navigation.go({ kind: "task", taskKey: task.key })}
+            onAddBlocker={setBlockerTask}
+            onManageDependencies={(selected) =>
+              navigation.go({
+                kind: "task",
+                taskKey: selected.key,
+                focus: "dependencies",
+              })
+            }
             pending={edits.pending.has(task.id)}
           />
         ))}
@@ -354,6 +369,13 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
         open={newTaskOpen}
         onOpenChange={setNewTaskOpen}
         projectId={projectId}
+      />
+      <QuickAddBlockerDialog
+        task={blockerTask}
+        open={blockerTask !== null}
+        onOpenChange={(open) => {
+          if (!open) setBlockerTask(null);
+        }}
       />
       <DetailToasts toasts={toasts} onDismiss={dismiss} />
     </div>
