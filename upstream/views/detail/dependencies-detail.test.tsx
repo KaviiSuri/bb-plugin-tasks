@@ -158,8 +158,6 @@ describe("task detail dependencies", () => {
       taskId: task.id,
       projectId: PROJECT_ID,
     });
-    await slot.emitRealtime("comments:changed", { taskId: task.id });
-
     await waitFor(() => {
       expect(reads.get("detail")).toBeGreaterThan(before.get("detail") ?? 0);
       expect(reads.get("dependencies")).toBeGreaterThan(
@@ -169,6 +167,12 @@ describe("task detail dependencies", () => {
         before.get("activity") ?? 0,
       );
     });
+
+    const activityAfterTasksChanged = reads.get("activity") ?? 0;
+    await slot.emitRealtime("comments:changed", { taskId: task.id });
+    await waitFor(() =>
+      expect(reads.get("activity")).toBeGreaterThan(activityAfterTasksChanged),
+    );
   });
 
   it("mounts the responsive authoritative section, presents context, filters cycles, mutates, and navigates", async () => {
