@@ -80,6 +80,14 @@ describe("tasks route grammar", () => {
       { kind: "manage" },
       { kind: "task", taskKey: "TSK-4" },
       { kind: "task", taskKey: "TSK-4", focus: "dependencies" },
+      {
+        kind: "graph",
+        taskKey: "TSK-4",
+        depth: 2,
+        containment: true,
+        dependencies: true,
+        resolved: false,
+      },
       { kind: "project", projectId: PROJECT_ID, view: "list" },
       { kind: "project", projectId: PROJECT_ID, view: "board" },
     ] as const;

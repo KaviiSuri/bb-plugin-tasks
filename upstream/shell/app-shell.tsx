@@ -21,6 +21,7 @@ import { TasksTopbar } from "./topbar.js";
 import { ListView } from "../views/list/index.js";
 import { BoardView } from "../views/board/index.js";
 import { DetailView } from "../views/detail/index.js";
+import { RelationshipAtlasView } from "../views/graph/atlas.js";
 import {
   ManagePanel,
   NewProjectDialog,
@@ -174,6 +175,20 @@ function RouteOutlet({
           focusDependencies={route.focus === "dependencies"}
         />
       );
+    case "graph":
+      return (
+        <RelationshipAtlasView
+          taskKey={route.taskKey}
+          initialSettings={{
+            depth: route.depth,
+            filters: {
+              containment: route.containment,
+              dependencies: route.dependencies,
+              resolved: route.resolved,
+            },
+          }}
+        />
+      );
     case "project":
       return route.view === "board" && boardUsable ? (
         <BoardView projectId={route.projectId} />
@@ -245,16 +260,20 @@ function TasksAppShellContent({ subPath }: PluginNavPanelProps) {
   // the user browses one this session (e.g. a deep-linked refresh).
   const lastBrowseRouteRef = useRef<TasksRoute | null>(null);
   useEffect(() => {
-    if (route.kind !== "task") lastBrowseRouteRef.current = route;
+    if (route.kind !== "task" && route.kind !== "graph") {
+      lastBrowseRouteRef.current = route;
+    }
     // Routes are plain data; keying on subPath tracks every route change.
   }, [subPath]);
-  const backFromTask = () =>
-    navigation.go(lastBrowseRouteRef.current ?? { kind: "all" });
-  const onTaskRoute = route.kind === "task";
-  const backRef = useRef(backFromTask);
-  backRef.current = backFromTask;
+  const backFromCurrent = () =>
+    route.kind === "graph"
+      ? navigation.go({ kind: "task", taskKey: route.taskKey })
+      : navigation.go(lastBrowseRouteRef.current ?? { kind: "all" });
+  const onDetailRoute = route.kind === "task" || route.kind === "graph";
+  const backRef = useRef(backFromCurrent);
+  backRef.current = backFromCurrent;
   useEffect(() => {
-    if (!onTaskRoute) return;
+    if (!onDetailRoute) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       if (isEditableTarget(event.target)) return;
@@ -264,7 +283,7 @@ function TasksAppShellContent({ subPath }: PluginNavPanelProps) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onTaskRoute]);
+  }, [onDetailRoute]);
 
   const noProjects = projects.data !== undefined && projects.data.length === 0;
   const newTaskProjectId = route.kind === "project" ? route.projectId : null;
@@ -340,10 +359,13 @@ function TasksAppShellContent({ subPath }: PluginNavPanelProps) {
           onNavigate={navigation.go}
           onToggleSidebar={toggleSidebar}
           onNewTask={() => setNewTaskOpen(true)}
-          onBack={backFromTask}
+          onBack={backFromCurrent}
         />
         <div className="min-h-0 flex-1 overflow-auto">
-          {noProjects && route.kind !== "task" && route.kind !== "manage" ? (
+          {noProjects &&
+          route.kind !== "task" &&
+          route.kind !== "graph" &&
+          route.kind !== "manage" ? (
             <NoProjectsEmptyState
               onNewProject={() => setNewProjectOpen(true)}
             />

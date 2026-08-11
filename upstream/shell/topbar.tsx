@@ -211,7 +211,7 @@ export function TasksTopbar({
     if (route.kind === "project") {
       return (projects ?? []).find((p) => p.id === route.projectId) ?? null;
     }
-    if (route.kind === "task") {
+    if (route.kind === "task" || route.kind === "graph") {
       // Task keys are `<prefix>-<number>`, so the prefix resolves the project.
       const prefix = route.taskKey.split("-", 1)[0] ?? "";
       return (projects ?? []).find((p) => p.prefix === prefix) ?? null;
@@ -256,6 +256,50 @@ export function TasksTopbar({
             <span className="truncate font-semibold">
               {project?.name ?? "Project"}
             </span>
+          </span>
+        );
+      case "graph":
+        return (
+          <span className="flex min-w-0 items-center gap-1.5">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6 shrink-0 max-md:pointer-coarse:size-9"
+              aria-label="Back to task (Esc)"
+              onClick={onBack}
+            >
+              <Icon name="ChevronLeft" className="size-4" />
+            </Button>
+            {project ? (
+              <span className="hidden min-w-0 items-center gap-2 text-muted-foreground @md:flex">
+                <span
+                  aria-hidden
+                  className="size-3 shrink-0 rounded-sm"
+                  style={{ backgroundColor: project.color }}
+                />
+                <span className="truncate font-medium">{project.name}</span>
+              </span>
+            ) : null}
+            {project ? (
+              <Icon
+                name="ChevronRight"
+                className="hidden size-3 shrink-0 text-muted-foreground @md:block"
+              />
+            ) : null}
+            <button
+              type="button"
+              className="min-w-0 truncate font-medium text-muted-foreground hover:text-foreground"
+              onClick={() =>
+                onNavigate({ kind: "task", taskKey: route.taskKey })
+              }
+            >
+              {route.taskKey}
+            </button>
+            <Icon
+              name="ChevronRight"
+              className="size-3 shrink-0 text-muted-foreground"
+            />
+            <span className="truncate font-medium">Relationship Atlas</span>
           </span>
         );
       case "task":

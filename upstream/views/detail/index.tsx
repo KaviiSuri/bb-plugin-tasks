@@ -34,6 +34,10 @@ import { DetailToasts, useDetailToasts } from "./toast.js";
 import { Icon } from "@bb/shared-ui/icon";
 import { cn } from "@bb/shared-ui/lib/utils";
 import { Skeleton } from "@bb/shared-ui/skeleton";
+import { useRelationshipGraph } from "../graph/data.js";
+import { LocalRelationshipGraph } from "../graph/local-graph.js";
+import { DEFAULT_GRAPH_FILTERS } from "../graph/model.js";
+import type { RelationshipGraphSettings } from "../graph/relationship-ui.js";
 
 export interface DetailViewProps {
   /** Task key like TSK-4 (not the ULID). */
@@ -305,6 +309,11 @@ function TaskDetail({
   // reset the editor on every unrelated realtime refresh.
   const [draft, setDraft] = useState<{ taskId: string; markdown: string }>();
   const [dependencyBusy, setDependencyBusy] = useState(false);
+  const [relationshipSettings, setRelationshipSettings] =
+    useState<RelationshipGraphSettings>({
+      depth: 1,
+      filters: DEFAULT_GRAPH_FILTERS,
+    });
   const rpcRef = useRef(rpc);
   rpcRef.current = rpc;
   const pushRef = useRef(push);
@@ -498,6 +507,27 @@ function TaskDetail({
     }
   };
 
+  const relationshipGraph = useRelationshipGraph(
+    task,
+    relationshipSettings.depth,
+  );
+  useEffect(() => {
+    setRelationshipSettings({ depth: 1, filters: DEFAULT_GRAPH_FILTERS });
+  }, [task.id]);
+  const openGraphTask = (taskId: string) => {
+    const entry = relationshipGraph.data?.nodes.get(taskId);
+    if (entry) navigation.go({ kind: "task", taskKey: entry.task.key });
+  };
+  const expandGraph = () =>
+    navigation.go({
+      kind: "graph",
+      taskKey: task.key,
+      depth: relationshipSettings.depth,
+      containment: relationshipSettings.filters.containment,
+      dependencies: relationshipSettings.filters.dependencies,
+      resolved: relationshipSettings.filters.resolved,
+    });
+
   const mentionItems = useMentionItems();
   const navigate = useBbNavigate();
 
@@ -634,6 +664,15 @@ function TaskDetail({
             }
           />
 
+          <LocalRelationshipGraph
+            query={relationshipGraph}
+            settings={relationshipSettings}
+            onSettingsChange={setRelationshipSettings}
+            onOpenTask={openGraphTask}
+            onExpand={expandGraph}
+            className="@[45rem]:hidden"
+          />
+
           {/* With no attached threads the section disappears entirely; the
               rail's Dispatch button is the entry point. */}
           {(threads.data ?? []).length > 0 ? (
@@ -664,6 +703,15 @@ function TaskDetail({
           onUpdate={(update) => void updateTask(update)}
           onError={(message) => push("error", message)}
           className="hidden @[45rem]:block"
+          relationshipGraph={
+            <LocalRelationshipGraph
+              query={relationshipGraph}
+              settings={relationshipSettings}
+              onSettingsChange={setRelationshipSettings}
+              onOpenTask={openGraphTask}
+              onExpand={expandGraph}
+            />
+          }
         />
       </div>
       <DetailToasts toasts={toasts} onDismiss={dismiss} />

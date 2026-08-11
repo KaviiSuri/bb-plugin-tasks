@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type {
   Label,
   Project,
@@ -456,10 +456,12 @@ export function PropertiesRail({
   onUpdate,
   onError,
   className,
+  relationshipGraph,
 }: TaskRailProps & {
   presets: Preset[] | undefined;
   onError: (message: string) => void;
   className?: string;
+  relationshipGraph?: ReactNode;
 }) {
   const taskLabels = (labels ?? []).filter((label) =>
     task.labelIds.includes(label.id),
@@ -572,6 +574,7 @@ export function PropertiesRail({
           <span className="text-muted-foreground">none active</span>
         )}
       </div>
+      {relationshipGraph}
     </aside>
   );
 }
