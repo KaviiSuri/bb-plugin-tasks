@@ -26,8 +26,8 @@ export interface RelationshipLayoutOptions {
 
 const TASK_WIDTH = 160;
 const TASK_HEIGHT = 70;
-const COMPACT_TASK_WIDTH = 72;
-const COMPACT_TASK_HEIGHT = 30;
+const COMPACT_TASK_WIDTH = 100;
+const COMPACT_TASK_HEIGHT = 24;
 
 interface LayoutMetrics {
   taskWidth: number;
@@ -46,11 +46,11 @@ function metrics(compact: boolean): LayoutMetrics {
         taskWidth: COMPACT_TASK_WIDTH,
         taskHeight: COMPACT_TASK_HEIGHT,
         columnGap: 18,
-        rowGap: 8,
-        outerPadding: 8,
-        groupPaddingX: 8,
-        groupPaddingTop: 20,
-        groupPaddingBottom: 8,
+        rowGap: 4,
+        outerPadding: 4,
+        groupPaddingX: 4,
+        groupPaddingTop: 12,
+        groupPaddingBottom: 4,
       }
     : {
         taskWidth: TASK_WIDTH,
@@ -242,6 +242,80 @@ function transpose(
   };
 }
 
+function verticalStackLayout(
+  graph: RelationshipGraph,
+  layoutMetrics: LayoutMetrics,
+  compact: boolean,
+): RelationshipGraphLayout {
+  const positions = new Map<string, GraphPosition>();
+  let y = layoutMetrics.outerPadding;
+  const x = layoutMetrics.outerPadding;
+
+  const root = graph.nodes.get(graph.rootId);
+  if (root) {
+    positions.set(graph.rootId, { x, y });
+    y += layoutMetrics.taskHeight + layoutMetrics.rowGap;
+  }
+
+  const subtaskIds = graph.edges
+    .filter(
+      (edge) => edge.kind === "containment" && edge.source === graph.rootId,
+    )
+    .map((edge) => edge.target)
+    .filter((taskId) => graph.nodes.has(taskId));
+
+  let group: GraphGroupLayout | null = null;
+  if (subtaskIds.length > 0) {
+    if (compact) {
+      // Compact: no group wrapper, just stack subtasks with a small gap
+      y += layoutMetrics.rowGap;
+      for (const taskId of subtaskIds) {
+        positions.set(taskId, { x, y });
+        y += layoutMetrics.taskHeight + layoutMetrics.rowGap;
+      }
+      y += layoutMetrics.rowGap;
+    } else {
+      const groupY = y;
+      y += layoutMetrics.groupPaddingTop;
+      for (const taskId of subtaskIds) {
+        positions.set(taskId, { x, y });
+        y += layoutMetrics.taskHeight + layoutMetrics.rowGap;
+      }
+      const groupHeight =
+        layoutMetrics.groupPaddingTop +
+        subtaskIds.length * layoutMetrics.taskHeight +
+        Math.max(0, subtaskIds.length - 1) * layoutMetrics.rowGap +
+        layoutMetrics.groupPaddingBottom;
+      group = {
+        id: "subtasks",
+        position: { x: x - layoutMetrics.groupPaddingX, y: groupY },
+        width: layoutMetrics.taskWidth + layoutMetrics.groupPaddingX * 2,
+        height: groupHeight,
+      };
+      y = groupY + groupHeight + layoutMetrics.rowGap;
+    }
+  }
+
+  const remaining = [...graph.nodes.keys()].filter(
+    (taskId) => taskId !== graph.rootId && !subtaskIds.includes(taskId),
+  );
+  for (const taskId of remaining) {
+    positions.set(taskId, { x, y });
+    y += layoutMetrics.taskHeight + layoutMetrics.rowGap;
+  }
+
+  const maxX =
+    x + layoutMetrics.taskWidth + (group ? layoutMetrics.groupPaddingX * 2 : 0);
+  const maxY = y - layoutMetrics.rowGap + layoutMetrics.outerPadding;
+
+  return {
+    positions,
+    group,
+    width: maxX + layoutMetrics.outerPadding,
+    height: Math.max(maxY, layoutMetrics.outerPadding * 2 + layoutMetrics.taskHeight),
+  };
+}
+
 /**
  * Deterministic bounded layered/compound layout for the relationship projection.
  *
@@ -255,6 +329,9 @@ export async function layoutRelationshipGraph(
   options: RelationshipLayoutOptions = {},
 ): Promise<RelationshipGraphLayout> {
   const layoutMetrics = metrics(options.compact ?? false);
+  if (options.compact) {
+    return verticalStackLayout(graph, layoutMetrics, true);
+  }
   const layout = rightwardLayout(graph, layoutMetrics);
   return options.direction === "DOWN"
     ? transpose(layout, graph, layoutMetrics)

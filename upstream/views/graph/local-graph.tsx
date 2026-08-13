@@ -73,7 +73,7 @@ export function LocalRelationshipGraph({
         onRetry={query.refresh}
         className="mt-2 rounded-md"
       />
-      <div className="mt-2 h-56 overflow-hidden rounded-md border border-border-hairline bg-surface-recessed-soft-solid">
+      <div className="mt-2 h-80 overflow-auto rounded-md border border-border-hairline bg-surface-recessed-soft-solid">
         <RelationshipState
           isLoading={query.isLoading}
           error={query.error}

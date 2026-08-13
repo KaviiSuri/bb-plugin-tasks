@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   BaseEdge,
   EdgeLabelRenderer,
@@ -42,6 +42,7 @@ type FlowNode = TaskFlowNode | GroupFlowNode | SummaryFlowNode;
 
 interface RelationshipEdgeData extends Record<string, unknown> {
   relationship: RelationshipGraphEdge;
+  compact?: boolean;
 }
 
 type RelationshipFlowEdge = Edge<RelationshipEdgeData, "relationship">;
@@ -56,7 +57,7 @@ function TaskNode({ data, selected }: NodeProps<TaskFlowNode>) {
         tabIndex={-1}
         title={`${task.key} · ${task.title} · ${project.name}`}
         className={cn(
-          "flex w-[4.5rem] items-center gap-1 rounded-md border border-border bg-card px-1 py-1 shadow-2xs transition-opacity motion-reduce:transition-none",
+          "flex w-24 items-center gap-1 rounded border border-border bg-card px-1.5 py-px shadow-2xs transition-opacity motion-reduce:transition-none",
           selected || data.root
             ? "border-input bg-surface-selected ring-1 ring-ring"
             : "hover:border-input hover:bg-state-hover",
@@ -64,7 +65,7 @@ function TaskNode({ data, selected }: NodeProps<TaskFlowNode>) {
         )}
       >
         <Handle type="target" position={Position.Left} className="opacity-0" />
-        <StatusIcon status={task.status} className="size-3" />
+        <StatusIcon status={task.status} className="size-2" />
         <span className="truncate font-mono text-2xs">{task.key}</span>
         <Handle type="source" position={Position.Right} className="opacity-0" />
       </div>
@@ -147,6 +148,7 @@ function OmittedSummary({ data }: NodeProps<SummaryFlowNode>) {
 
 function RelationshipEdge(props: EdgeProps<RelationshipFlowEdge>) {
   const relationship = props.data?.relationship;
+  const compact = props.data?.compact ?? false;
   const [path, labelX, labelY] = getBezierPath(props);
   if (!relationship) return <BaseEdge {...props} path={path} />;
   const containment = relationship.kind === "containment";
@@ -174,17 +176,19 @@ function RelationshipEdge(props: EdgeProps<RelationshipFlowEdge>) {
           ...props.style,
         }}
       />
-      <EdgeLabelRenderer>
-        <span
-          className="pointer-events-none absolute rounded border border-border-hairline bg-card px-1 py-px text-2xs font-medium text-muted-foreground shadow-2xs"
-          style={{
-            transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
-          }}
-        >
-          {label}
-          {context}
-        </span>
-      </EdgeLabelRenderer>
+      {!compact && (
+        <EdgeLabelRenderer>
+          <span
+            className="pointer-events-none absolute rounded border border-border-hairline bg-card px-1 py-px text-2xs font-medium text-muted-foreground shadow-2xs"
+            style={{
+              transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
+            }}
+          >
+            {label}
+            {context}
+          </span>
+        </EdgeLabelRenderer>
+      )}
     </>
   );
 }
@@ -257,6 +261,21 @@ function chooseDirectionalNeighbor(
   );
 }
 
+function useBbColorMode(): "dark" | "light" {
+  return useSyncExternalStore(
+    (callback) => {
+      const observer = new MutationObserver(callback);
+      observer.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["class"],
+      });
+      return () => observer.disconnect();
+    },
+    () => (document.documentElement.classList.contains("dark") ? "dark" : "light"),
+    () => "light",
+  );
+}
+
 function GraphCanvasInner({
   graph,
   compact,
@@ -268,6 +287,7 @@ function GraphCanvasInner({
   omittedNodeCount,
   omittedEdgeCount,
 }: RelationshipGraphCanvasProps) {
+  const colorMode = useBbColorMode();
   const [nodes, setNodes] = useState<FlowNode[]>([]);
   const [edges, setEdges] = useState<RelationshipFlowEdge[]>([]);
   const [layoutError, setLayoutError] = useState<string | null>(null);
@@ -348,7 +368,7 @@ function GraphCanvasInner({
             source: relationship.source,
             target: relationship.target,
             type: "relationship",
-            data: { relationship },
+            data: { relationship, compact },
             markerEnd:
               relationship.kind === "dependency"
                 ? {
@@ -373,18 +393,26 @@ function GraphCanvasInner({
         setNodes(nextNodes);
         setEdges(nextEdges);
         requestAnimationFrame(() => {
-          const focusNodes = compact
-            ? nextNodes
-            : nextNodes.filter(
-                (node) =>
-                  node.type === "omittedSummary" ||
-                  (node.type === "task" && connected.has(node.id)),
-              );
-          void fitView({
-            nodes: focusNodes,
-            padding: compact ? 0.08 : 0.18,
-            duration: 0,
-          });
+          if (compact) {
+            void fitView({
+              nodes: nextNodes,
+              padding: 0.02,
+              minZoom: 0.6,
+              maxZoom: 1.2,
+              duration: 0,
+            });
+          } else {
+            const focusNodes = nextNodes.filter(
+              (node) =>
+                node.type === "omittedSummary" ||
+                (node.type === "task" && connected.has(node.id)),
+            );
+            void fitView({
+              nodes: focusNodes,
+              padding: 0.18,
+              duration: 0,
+            });
+          }
         });
       },
       (reason: unknown) => {
@@ -530,7 +558,7 @@ function GraphCanvasInner({
           if (node.type === "task") onOpenTask(node.id);
         }}
         proOptions={{ hideAttribution: true }}
-        colorMode="system"
+        colorMode={colorMode}
         className="bg-surface-recessed-soft-solid"
       />
     </div>
