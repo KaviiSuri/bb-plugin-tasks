@@ -34,6 +34,10 @@ import { DetailToasts, useDetailToasts } from "./toast.js";
 import { Icon } from "@bb/shared-ui/icon";
 import { cn } from "@bb/shared-ui/lib/utils";
 import { Skeleton } from "@bb/shared-ui/skeleton";
+import { useLocalRelationshipGraph } from "../graph/data.js";
+import { LocalRelationshipGraphPortal } from "../graph/local-graph.js";
+import { DEFAULT_GRAPH_FILTERS } from "../graph/model.js";
+import type { RelationshipGraphSettings } from "../graph/relationship-ui.js";
 
 export interface DetailViewProps {
   /** Task key like TSK-4 (not the ULID). */
@@ -290,6 +294,27 @@ function TaskDetail({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const subtasksRef = useRef<HTMLElement>(null);
   const dependenciesRef = useRef<HTMLElement>(null);
+  const detailContainerRef = useRef<HTMLDivElement>(null);
+  const [wideGraphLayout, setWideGraphLayout] = useState(false);
+  const [narrowGraphHost, setNarrowGraphHost] = useState<HTMLDivElement | null>(
+    null,
+  );
+  const [wideGraphHost, setWideGraphHost] = useState<HTMLDivElement | null>(
+    null,
+  );
+
+  useEffect(() => {
+    const container = detailContainerRef.current;
+    if (!container || typeof ResizeObserver === "undefined") return;
+    const update = (width: number) => setWideGraphLayout(width >= 720);
+    update(container.getBoundingClientRect().width);
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) update(entry.contentRect.width);
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     if (!focusDependencies) return;
@@ -305,6 +330,11 @@ function TaskDetail({
   // reset the editor on every unrelated realtime refresh.
   const [draft, setDraft] = useState<{ taskId: string; markdown: string }>();
   const [dependencyBusy, setDependencyBusy] = useState(false);
+  const [relationshipSettings, setRelationshipSettings] =
+    useState<RelationshipGraphSettings>({
+      depth: 1,
+      filters: DEFAULT_GRAPH_FILTERS,
+    });
   const rpcRef = useRef(rpc);
   rpcRef.current = rpc;
   const pushRef = useRef(push);
@@ -498,6 +528,27 @@ function TaskDetail({
     }
   };
 
+  const relationshipGraph = useLocalRelationshipGraph(
+    task,
+    relationshipSettings.depth,
+  );
+  useEffect(() => {
+    setRelationshipSettings({ depth: 1, filters: DEFAULT_GRAPH_FILTERS });
+  }, [task.id]);
+  const openGraphTask = (taskId: string) => {
+    const entry = relationshipGraph.data?.nodes.get(taskId);
+    if (entry) navigation.go({ kind: "task", taskKey: entry.task.key });
+  };
+  const expandGraph = () =>
+    navigation.go({
+      kind: "graph",
+      taskKey: task.key,
+      depth: relationshipSettings.depth,
+      containment: relationshipSettings.filters.containment,
+      dependencies: relationshipSettings.filters.dependencies,
+      resolved: relationshipSettings.filters.resolved,
+    });
+
   const mentionItems = useMentionItems();
   const navigate = useBbNavigate();
 
@@ -506,7 +557,10 @@ function TaskDetail({
   const parentTask = parent.data ?? null;
 
   return (
-    <div className="@container flex min-h-full flex-col bg-surface-recessed-solid p-3">
+    <div
+      ref={detailContainerRef}
+      className="@container flex min-h-full flex-col bg-surface-recessed-solid p-3"
+    >
       <div className="flex flex-1 items-stretch rounded-lg border border-border bg-card shadow-2xs">
         <div className="mx-auto w-full min-w-0 max-w-[55rem] flex-1 px-7 pb-16 pt-8 @3xl:px-13 @3xl:pt-11">
           {parentTask || subtasks.data?.length ? (
@@ -634,6 +688,8 @@ function TaskDetail({
             }
           />
 
+          <div ref={setNarrowGraphHost} className="@[45rem]:hidden" />
+
           {/* With no attached threads the section disappears entirely; the
               rail's Dispatch button is the entry point. */}
           {(threads.data ?? []).length > 0 ? (
@@ -664,8 +720,17 @@ function TaskDetail({
           onUpdate={(update) => void updateTask(update)}
           onError={(message) => push("error", message)}
           className="hidden @[45rem]:block"
+          relationshipGraph={<div ref={setWideGraphHost} />}
         />
       </div>
+      <LocalRelationshipGraphPortal
+        host={wideGraphLayout ? wideGraphHost : narrowGraphHost}
+        query={relationshipGraph}
+        settings={relationshipSettings}
+        onSettingsChange={setRelationshipSettings}
+        onOpenTask={openGraphTask}
+        onExpand={expandGraph}
+      />
       <DetailToasts toasts={toasts} onDismiss={dismiss} />
     </div>
   );

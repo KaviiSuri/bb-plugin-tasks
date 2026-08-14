@@ -9,6 +9,7 @@ configure({ asyncUtilTimeout: 8_000 });
 if (typeof Element !== "undefined" && !Element.prototype.scrollIntoView) {
   Object.defineProperty(Element.prototype, "scrollIntoView", {
     configurable: true,
+    writable: true,
     value: () => {},
   });
 }
