@@ -2,10 +2,10 @@ import type { Project, Task } from "../../shared/contract.js";
 import type { TasksRpc } from "../../shell/data.js";
 import { TASKS_PAGE_MAX_LIMIT } from "../../shared/pagination.js";
 import {
-  ATLAS_GRAPH_NODE_LIMIT,
   buildRelationshipGraph,
   type DependencySnapshot,
   type RelationshipGraph,
+  type RelationshipGraphDepth,
   type RelationshipGraphNode,
 } from "./model.js";
 
@@ -70,7 +70,7 @@ function requireProject(
 }
 
 export interface LoadRelationshipGraphOptions {
-  dependencyDepth: 1 | 2;
+  dependencyDepth: RelationshipGraphDepth;
   nodeLimit?: number;
 }
 
@@ -101,7 +101,10 @@ export async function loadRelationshipGraph(
   if (childrenResult.status === "rejected") {
     errors.push(`Could not load subtasks: ${message(childrenResult.reason)}`);
   }
-  const nodeLimit = Math.max(1, options.nodeLimit ?? ATLAS_GRAPH_NODE_LIMIT);
+  const nodeLimit =
+    options.nodeLimit === undefined
+      ? Number.POSITIVE_INFINITY
+      : Math.max(1, options.nodeLimit);
   const allChildren =
     childrenResult.status === "fulfilled" ? childrenResult.value : [];
   const parentTask =
@@ -137,15 +140,23 @@ export async function loadRelationshipGraph(
   }
   // A parent gives containment context for an open subtask, but its unrelated
   // dependency neighborhood is not part of that subtask's direct scope.
-  let frontier = [rootNode, ...childNodes];
+  const allBlockers = options.dependencyDepth === "all-blockers";
+  const maxDepth = allBlockers ? Number.POSITIVE_INFINITY : options.dependencyDepth;
+  let frontier = allBlockers ? [rootNode] : [rootNode, ...childNodes];
   const fetched = new Set<string>();
   const dependencies: DependencySnapshot[] = [];
   const omittedDependencyNodeIds = new Set<string>();
   const omittedDependencyEdgeIds = new Set<string>();
+  let depth = 0;
 
-  for (let depth = 0; depth < options.dependencyDepth; depth += 1) {
+  while (frontier.length > 0 && depth < maxDepth) {
+    const queued = new Set<string>();
     const batch = frontier
-      .filter((entry) => !fetched.has(entry.task.id))
+      .filter((entry) => {
+        if (fetched.has(entry.task.id) || queued.has(entry.task.id)) return false;
+        queued.add(entry.task.id);
+        return true;
+      })
       .slice(0, Math.max(0, nodeLimit - fetched.size));
     frontier = [];
     for (const entry of batch) fetched.add(entry.task.id);
@@ -171,10 +182,16 @@ export async function loadRelationshipGraph(
       dependencies.push({
         taskId: entry.task.id,
         blockedBy: result.value.dependencies.blockedBy,
-        blocks: result.value.dependencies.blocks,
+        // All-blockers is an upstream critical-path projection. Including every
+        // task a blocker also happens to unlock would pull unrelated branches in.
+        blocks: allBlockers ? [] : result.value.dependencies.blocks,
       });
       for (const related of result.value.dependencies.blockedBy) {
-        if (known.has(related.task.id)) continue;
+        const existing = known.get(related.task.id);
+        if (existing) {
+          if (allBlockers && !fetched.has(existing.task.id)) frontier.push(existing);
+          continue;
+        }
         if (known.size >= nodeLimit) {
           omittedDependencyNodeIds.add(related.task.id);
           omittedDependencyEdgeIds.add(
@@ -186,6 +203,7 @@ export async function loadRelationshipGraph(
         known.set(related.task.id, relatedNode);
         frontier.push(relatedNode);
       }
+      if (allBlockers) return;
       for (const related of result.value.dependencies.blocks) {
         if (known.has(related.task.id)) continue;
         if (known.size >= nodeLimit) {
@@ -200,6 +218,7 @@ export async function loadRelationshipGraph(
         frontier.push(relatedNode);
       }
     });
+    depth += 1;
   }
 
   const boundedDependencies = dependencies.map((snapshot) => ({
@@ -216,9 +235,9 @@ export async function loadRelationshipGraph(
     omittedNodeCount: omittedHierarchyNodeCount + omittedDependencyNodeIds.size,
     omittedEdgeCount: omittedHierarchyEdgeCount + omittedDependencyEdgeIds.size,
   });
-  if (graph.omittedNodeCount > 0) {
+  if (graph.omittedNodeCount > 0 && Number.isFinite(nodeLimit)) {
     graph.warnings.push(
-      `${graph.omittedNodeCount} tasks and ${graph.omittedEdgeCount} relationships are outside the ${nodeLimit}-node graph budget.`,
+      `${graph.omittedNodeCount} tasks and ${graph.omittedEdgeCount} relationships are outside the ${nodeLimit}-node Atlas safety limit.`,
     );
   }
   return graph;

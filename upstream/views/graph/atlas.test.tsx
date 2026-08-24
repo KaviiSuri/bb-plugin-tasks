@@ -125,7 +125,7 @@ describe("relationship Atlas", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Dependency depth: Direct" }),
+      screen.getByRole("button", { name: "Dependency scope: Direct" }),
     );
     expect(go).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "graph", taskKey: root.key, depth: 2 }),

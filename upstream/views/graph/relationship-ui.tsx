@@ -6,12 +6,13 @@ import { cn } from "@bb/shared-ui/lib/utils";
 import { STATUS_LABELS, StatusIcon } from "../detail/meta.js";
 import type {
   RelationshipGraph,
+  RelationshipGraphDepth,
   RelationshipGraphEdge,
   RelationshipGraphFilters,
 } from "./model.js";
 
 export interface RelationshipGraphSettings {
-  depth: 1 | 2;
+  depth: RelationshipGraphDepth;
   filters: RelationshipGraphFilters;
 }
 
@@ -103,14 +104,26 @@ export function RelationshipGraphControls({
         variant="outline"
         size="sm"
         disabled={disabled}
-        aria-label={`Dependency depth: ${settings.depth === 1 ? "Direct" : "2 hops"}`}
-        aria-pressed={settings.depth === 2}
+        aria-label={`Dependency scope: ${settings.depth === 1 ? "Direct" : settings.depth === 2 ? "2 hops" : "All blockers"}`}
+        aria-pressed={settings.depth !== 1}
         className={controlClass}
         onClick={() =>
-          onChange({ ...settings, depth: settings.depth === 1 ? 2 : 1 })
+          onChange({
+            ...settings,
+            depth:
+              settings.depth === 1
+                ? 2
+                : settings.depth === 2
+                  ? "all-blockers"
+                  : 1,
+          })
         }
       >
-        {settings.depth === 1 ? "Direct" : "2 hops"}
+        {settings.depth === 1
+          ? "Direct"
+          : settings.depth === 2
+            ? "2 hops"
+            : "All blockers"}
       </Button>
       <Button
         type="button"

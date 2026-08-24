@@ -4,8 +4,6 @@ import type { TasksQuery } from "../../shell/data.js";
 import { cn } from "@bb/shared-ui/lib/utils";
 import {
   filterRelationshipGraph,
-  limitRelationshipGraph,
-  LOCAL_GRAPH_NODE_LIMIT,
   type RelationshipGraph,
 } from "./model.js";
 import { LazyRelationshipGraphCanvas } from "./lazy-canvas.js";
@@ -37,10 +35,11 @@ export function LocalRelationshipGraph({
   const [fitRequest, setFitRequest] = useState(0);
   const limited = useMemo(() => {
     if (!query.data) return null;
-    return limitRelationshipGraph(
-      filterRelationshipGraph(query.data, settings.filters),
-      LOCAL_GRAPH_NODE_LIMIT,
-    );
+    return {
+      graph: filterRelationshipGraph(query.data, settings.filters),
+      omittedNodeCount: query.data.omittedNodeCount,
+      omittedEdgeCount: query.data.omittedEdgeCount,
+    };
   }, [query.data, settings.filters]);
 
   return (

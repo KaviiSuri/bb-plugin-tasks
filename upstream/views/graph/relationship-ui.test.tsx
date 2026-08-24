@@ -90,6 +90,44 @@ describe("relationship graph accessible UI", () => {
     ).toBeTruthy();
   });
 
+  it("cycles through direct, two-hop, and all-blocker scopes", () => {
+    const onChange = vi.fn();
+    const settings = {
+      depth: 2 as const,
+      filters: {
+        containment: true,
+        dependencies: true,
+        resolved: true,
+      },
+    };
+    const view = render(
+      <RelationshipGraphControls
+        settings={settings}
+        onChange={onChange}
+        onFit={() => {}}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Dependency scope: 2 hops" }),
+    );
+    expect(onChange).toHaveBeenCalledWith({
+      ...settings,
+      depth: "all-blockers",
+    });
+
+    view.rerender(
+      <RelationshipGraphControls
+        settings={{ ...settings, depth: "all-blockers" }}
+        onChange={onChange}
+        onFit={() => {}}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Dependency scope: All blockers" }),
+    ).toBeTruthy();
+  });
+
   it("keeps invalid-data notices available when every bad edge is suppressed", () => {
     const root = task("root", 1, "todo", null);
     const graph = buildRelationshipGraph({

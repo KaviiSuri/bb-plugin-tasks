@@ -12,10 +12,14 @@ vi.mock("./lazy-canvas.js", () => ({
     graph,
     fitRequest,
   }: {
-    graph: { edges: unknown[] };
+    graph: { nodes: Map<string, unknown>; edges: unknown[] };
     fitRequest: number;
   }) => (
-    <div data-testid="canvas" data-fit-request={fitRequest}>
+    <div
+      data-testid="canvas"
+      data-fit-request={fitRequest}
+      data-rendered-nodes={graph.nodes.size}
+    >
       {graph.edges.length} rendered edges
     </div>
   ),
@@ -100,11 +104,42 @@ describe("local relationship graph", () => {
     fireEvent.click(screen.getByRole("button", { name: /Expand/ }));
     expect(onExpand).toHaveBeenCalledOnce();
     fireEvent.click(
-      screen.getByRole("button", { name: "Dependency depth: Direct" }),
+      screen.getByRole("button", { name: "Dependency scope: Direct" }),
     );
     expect(onSettingsChange).toHaveBeenCalledWith(
       expect.objectContaining({ depth: 2 }),
     );
+  });
+
+  it("does not discard local nodes at the old 12-node visual budget", () => {
+    const root = task("root", 1, null);
+    const children = Array.from({ length: 14 }, (_, index) =>
+      task(`child-${index}`, index + 2, root.id),
+    );
+    const graph = buildRelationshipGraph({
+      root: { task: root, project },
+      children: children.map((entry) => ({ task: entry, project })),
+      dependencies: [],
+    });
+    render(
+      <LocalRelationshipGraph
+        query={{ data: graph, error: null, isLoading: false, refresh: () => {} }}
+        settings={{
+          depth: 1,
+          filters: {
+            containment: true,
+            dependencies: true,
+            resolved: true,
+          },
+        }}
+        onSettingsChange={() => {}}
+        onOpenTask={() => {}}
+        onExpand={() => {}}
+      />,
+    );
+
+    expect(screen.getByText("15 tasks · 14 relationships")).toBeTruthy();
+    expect(screen.getByTestId("canvas").dataset.renderedNodes).toBe("15");
   });
 
   it("shows a retryable stale notice while preserving a previously loaded graph", () => {

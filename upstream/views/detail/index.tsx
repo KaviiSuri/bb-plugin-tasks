@@ -332,7 +332,7 @@ function TaskDetail({
   const [dependencyBusy, setDependencyBusy] = useState(false);
   const [relationshipSettings, setRelationshipSettings] =
     useState<RelationshipGraphSettings>({
-      depth: 1,
+      depth: "all-blockers",
       filters: DEFAULT_GRAPH_FILTERS,
     });
   const rpcRef = useRef(rpc);
@@ -533,7 +533,10 @@ function TaskDetail({
     relationshipSettings.depth,
   );
   useEffect(() => {
-    setRelationshipSettings({ depth: 1, filters: DEFAULT_GRAPH_FILTERS });
+    setRelationshipSettings({
+      depth: "all-blockers",
+      filters: DEFAULT_GRAPH_FILTERS,
+    });
   }, [task.id]);
   const openGraphTask = (taskId: string) => {
     const entry = relationshipGraph.data?.nodes.get(taskId);

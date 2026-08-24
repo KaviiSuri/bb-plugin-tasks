@@ -1,12 +1,12 @@
 # Third-party notices
 
-## React Flow (`@xyflow/react`)
+## React Force Graph (`react-force-graph-2d`)
 
-- Version used: 12.11.2
+- Version used: 1.29.1
 - License: MIT
-- Source: https://github.com/xyflow/xyflow/tree/v12.11.2
-- License text: [third_party_licenses/REACT_FLOW_LICENSE](third_party_licenses/REACT_FLOW_LICENSE)
+- Source: https://github.com/vasturiano/react-force-graph/tree/master/packages/react-force-graph-2d
+- License text: [third_party_licenses/REACT_FORCE_GRAPH_LICENSE](third_party_licenses/REACT_FORCE_GRAPH_LICENSE)
 
-React Flow provides the interactive relationship-graph canvas. The required
-copyright and permission notice is included verbatim in the linked license
-file.
+React Force Graph provides the interactive, physics-driven relationship graph.
+The required copyright and permission notice is included verbatim in the linked
+license file.

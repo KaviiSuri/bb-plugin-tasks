@@ -37,7 +37,11 @@ export function AtlasContent({
   const [representation, setRepresentation] = useState<
     "graph" | "relationships"
   >("graph");
-  const query = useRelationshipGraph(root, settings.depth);
+  const query = useRelationshipGraph(
+    root,
+    settings.depth,
+    ATLAS_GRAPH_NODE_LIMIT,
+  );
   useEffect(() => {
     setSettings(initialSettings);
     setSelectedTaskId(root.id);

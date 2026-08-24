@@ -1,13 +1,16 @@
 import type { Task } from "../../shared/contract.js";
 import { useTasksQuery, type TasksQuery } from "../../shell/data.js";
-import { LOCAL_GRAPH_NODE_LIMIT, type RelationshipGraph } from "./model.js";
+import type {
+  RelationshipGraph,
+  RelationshipGraphDepth,
+} from "./model.js";
 import { loadRelationshipGraph } from "./loader.js";
 
 export { loadRelationshipGraph } from "./loader.js";
 
 export function useRelationshipGraph(
   root: Task,
-  dependencyDepth: 1 | 2,
+  dependencyDepth: RelationshipGraphDepth,
   nodeLimit?: number,
 ): TasksQuery<RelationshipGraph> {
   return useTasksQuery(
@@ -17,10 +20,10 @@ export function useRelationshipGraph(
   );
 }
 
-/** Task detail always loads the approved bounded Local Graph projection. */
+/** Task detail loads its complete local relationship scope. */
 export function useLocalRelationshipGraph(
   root: Task,
-  dependencyDepth: 1 | 2,
+  dependencyDepth: RelationshipGraphDepth,
 ): TasksQuery<RelationshipGraph> {
-  return useRelationshipGraph(root, dependencyDepth, LOCAL_GRAPH_NODE_LIMIT);
+  return useRelationshipGraph(root, dependencyDepth);
 }

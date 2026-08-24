@@ -1,5 +1,7 @@
 export const PANEL_PATH = "tasks";
 
+import type { RelationshipGraphDepth } from "../views/graph/model.js";
+
 export type TaskViewMode = "list" | "board";
 
 export type TasksRoute =
@@ -10,7 +12,7 @@ export type TasksRoute =
   | {
       kind: "graph";
       taskKey: string;
-      depth: 1 | 2;
+      depth: RelationshipGraphDepth;
       containment: boolean;
       dependencies: boolean;
       resolved: boolean;
@@ -53,7 +55,12 @@ export function parseTasksRoute(rawSubPath: string): TasksRoute {
     return {
       kind: "graph",
       taskKey,
-      depth: params.get("depth") === "2" ? 2 : 1,
+      depth:
+        params.get("depth") === "1"
+          ? 1
+          : params.get("depth") === "2"
+            ? 2
+            : "all-blockers",
       containment: containment || !dependencies,
       dependencies: dependencies || !containment,
       resolved: params.get("resolved") !== "0",

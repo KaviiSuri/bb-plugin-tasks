@@ -42,12 +42,17 @@ bb plugin dev .        # hot-reload while iterating
 
 ## Relationship graph layout
 
-The task relationship graph uses React Flow with a small deterministic layered
-layout implemented in the plugin. The approved prototype used ELK, but BB's
-offline plugin builder currently emits one always-transferred frontend artifact;
-ELK added roughly 3.33 MB raw / 571 KB gzip even when no graph was opened. The
-bounded in-repo layout preserves blocker-to-dependent ranks and direct-subtask
-grouping without shipping that runtime on every Tasks page.
+The task relationship graph uses `react-force-graph-2d`, an HTML canvas renderer
+backed by `d3-force` physics. Nodes remain draggable and the simulation combines
+charge, link-distance, centering, and label-collision forces so task keys do not
+collapse into a vertical stack. Full task cards appear on hover or keyboard
+focus. Its default scope recursively follows every upstream blocker while
+excluding unrelated downstream branches. The local graph does not drop nodes at
+an arbitrary visual budget; the expanded Atlas keeps a 150-node safety limit.
+
+BB's offline plugin builder emits one always-transferred frontend artifact. An
+isolated production bundle measurement put React Force Graph at about 63 KB gzip,
+far below the rejected ELK prototype's roughly 571 KB gzip addition.
 
 ## Install
 

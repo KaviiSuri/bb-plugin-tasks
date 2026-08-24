@@ -14,6 +14,12 @@ describe("relationship graph route", () => {
     expect(parseTasksRoute(tasksRouteToSubPath(route))).toEqual(route);
   });
 
+  it("defaults graph links to the complete transitive blocker chain", () => {
+    expect(parseTasksRoute("graph/TSK-9")).toMatchObject({
+      depth: "all-blockers",
+    });
+  });
+
   it("never parses a graph with both relationship types disabled", () => {
     expect(
       parseTasksRoute(

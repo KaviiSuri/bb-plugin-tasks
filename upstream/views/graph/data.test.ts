@@ -39,6 +39,8 @@ const root = task("root", 1, null);
 const child = task("child", 2, root.id);
 const blocker = task("blocker", 3, null);
 const frontier = task("frontier", 4, null);
+const deepest = task("deepest", 5, null);
+const unrelated = task("unrelated", 6, null);
 const related = (value: Task): DependencyTask => ({ task: value, project });
 
 function rpcWith(
@@ -93,6 +95,40 @@ describe("relationship graph data loader", () => {
     ).toBe(true);
   });
 
+  it("recursively loads every upstream blocker without unrelated downstream branches", async () => {
+    const graph = await loadRelationshipGraph(
+      rpcWith({
+        [root.id]: {
+          blockedBy: [related(blocker)],
+          blocks: [related(unrelated)],
+        },
+        [blocker.id]: {
+          blockedBy: [related(frontier)],
+          blocks: [related(unrelated)],
+        },
+        [frontier.id]: {
+          blockedBy: [related(deepest)],
+          blocks: [],
+        },
+        [deepest.id]: { blockedBy: [], blocks: [] },
+      }),
+      root,
+      { dependencyDepth: "all-blockers" },
+    );
+
+    expect([...graph.nodes.keys()]).toEqual(
+      expect.arrayContaining([root.id, child.id, blocker.id, frontier.id, deepest.id]),
+    );
+    expect(graph.nodes.has(unrelated.id)).toBe(false);
+    expect(graph.edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ source: blocker.id, target: root.id }),
+        expect.objectContaining({ source: frontier.id, target: blocker.id }),
+        expect.objectContaining({ source: deepest.id, target: frontier.id }),
+      ]),
+    );
+  });
+
   it("preserves hierarchy and successful regions after a dependency RPC error", async () => {
     const graph = await loadRelationshipGraph(
       rpcWith({
@@ -135,7 +171,7 @@ describe("relationship graph data loader", () => {
     expect(graph.errors.join(" ")).toContain("Could not load subtasks");
   });
 
-  it("caps Local Graph nodes and dependency RPCs at its data budget", async () => {
+  it("caps Atlas nodes and dependency RPCs at its explicit safety limit", async () => {
     const children = Array.from({ length: 30 }, (_, index) =>
       task(`child-${index}`, index + 10, root.id),
     );
@@ -165,6 +201,31 @@ describe("relationship graph data loader", () => {
     expect(graph.omittedNodeCount).toBe(19);
   });
 
+  it("loads every local node when no Atlas safety limit is requested", async () => {
+    const children = Array.from({ length: 30 }, (_, index) =>
+      task(`local-child-${index}`, index + 50, root.id),
+    );
+    const rpc = {
+      call: async (method: string) => {
+        if (method === "listProjects") return { projects: [project] };
+        if (method === "getTask") return { task: null };
+        if (method === "listTasks") return { tasks: children, nextCursor: null };
+        if (method === "listTaskDependencies") {
+          return { blockedBy: [], blocks: [] };
+        }
+        throw new Error(`Unexpected RPC ${method}`);
+      },
+    } as unknown as TasksRpc;
+
+    const graph = await loadRelationshipGraph(rpc, root, {
+      dependencyDepth: 1,
+    });
+
+    expect(graph.nodes.size).toBe(31);
+    expect(graph.omittedNodeCount).toBe(0);
+    expect(graph.warnings.join(" ")).not.toContain("safety limit");
+  });
+
   it("reports exact bounded dependency omissions instead of truncating silently", async () => {
     const graph = await loadRelationshipGraph(
       rpcWith({
@@ -178,7 +239,7 @@ describe("relationship graph data loader", () => {
     expect(graph.omittedNodeCount).toBe(1);
     expect(graph.omittedEdgeCount).toBe(1);
     expect(graph.warnings.join(" ")).toContain(
-      "outside the 2-node graph budget",
+      "outside the 2-node Atlas safety limit",
     );
   });
 });

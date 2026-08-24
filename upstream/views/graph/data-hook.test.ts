@@ -47,14 +47,14 @@ const root: Task = {
 };
 
 describe("Local Graph data query", () => {
-  it("cannot invoke the loader without the 12-node budget", async () => {
+  it("loads the complete local scope without an arbitrary node budget", async () => {
     useLocalRelationshipGraph(root, 2);
     const rpc = { call: vi.fn() };
     await mocks.fetcher?.(rpc);
 
     expect(mocks.load).toHaveBeenCalledWith(rpc, root, {
       dependencyDepth: 2,
-      nodeLimit: 12,
+      nodeLimit: undefined,
     });
   });
 });

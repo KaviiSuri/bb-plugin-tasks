@@ -1,4 +1,4 @@
-import { useState, type ComponentType, type ReactNode } from "react";
+import { useState } from "react";
 import {
   cleanup,
   fireEvent,
@@ -12,69 +12,62 @@ import type { Project, Task } from "../../shared/contract.js";
 import { buildRelationshipGraph } from "./model.js";
 
 const mocks = vi.hoisted(() => ({
-  fitView: vi.fn(() => Promise.resolve(true)),
-  layout: vi.fn(),
+  zoomToFit: vi.fn(),
+  reheat: vi.fn(),
+  graph2ScreenCoords: vi.fn((x: number, y: number) => ({ x, y })),
+  chargeStrength: vi.fn(),
+  chargeDistanceMin: vi.fn(),
+  linkDistance: vi.fn(),
+  linkStrength: vi.fn(),
+  d3Force: vi.fn(),
 }));
 
-vi.mock("./layout.js", () => ({
-  layoutRelationshipGraph: mocks.layout,
-}));
-
-vi.mock("@xyflow/react", () => ({
-  BaseEdge: () => null,
-  EdgeLabelRenderer: ({ children }: { children: ReactNode }) => children,
-  Handle: () => null,
-  MarkerType: { ArrowClosed: "arrowclosed" },
-  Position: { Left: "left", Right: "right" },
-  ReactFlowProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
-  getBezierPath: () => ["M0 0", 0, 0],
-  useReactFlow: () => ({ fitView: mocks.fitView }),
-  ReactFlow: ({
-    nodes,
-    edges,
-    nodeTypes,
-    onNodeClick,
-    onNodeDoubleClick,
-  }: {
-    nodes: Array<Record<string, any>>;
-    edges: Array<Record<string, any>>;
-    nodeTypes: Record<string, ComponentType<any>>;
-    onNodeClick: (event: unknown, node: Record<string, any>) => void;
-    onNodeDoubleClick: (event: unknown, node: Record<string, any>) => void;
-  }) => (
-    <div data-testid="react-flow">
-      {nodes.map((node) => {
-        const Node = nodeTypes[node.type];
-        return (
-          <div
+vi.mock("react-force-graph-2d", async () => {
+  const React = await import("react");
+  const MockForceGraph = React.forwardRef(function MockForceGraph(
+    props: Record<string, any>,
+    ref: React.ForwardedRef<Record<string, any>>,
+  ) {
+    React.useImperativeHandle(ref, () => ({
+      zoomToFit: mocks.zoomToFit,
+      d3ReheatSimulation: mocks.reheat,
+      graph2ScreenCoords: mocks.graph2ScreenCoords,
+      d3Force: mocks.d3Force,
+    }));
+    const data = props.graphData as {
+      nodes: Array<Record<string, any>>;
+      links: Array<Record<string, any>>;
+    };
+    return (
+      <div data-testid="force-graph">
+        {data.nodes.map((node) => (
+          <button
             key={node.id}
-            role={node.type === "task" ? "button" : undefined}
-            className="react-flow__node"
-            data-id={node.id}
-            tabIndex={node.focusable ? 0 : -1}
-            aria-label={node.ariaLabel}
-            data-selected={node.selected ? "true" : "false"}
-            onClick={(event) => onNodeClick(event, node)}
-            onDoubleClick={(event) => onNodeDoubleClick(event, node)}
+            data-testid={`canvas-node-${node.id}`}
+            onMouseEnter={() => props.onNodeHover(node, null)}
+            onMouseLeave={() => props.onNodeHover(null, node)}
+            onClick={(event) => props.onNodeClick(node, event.nativeEvent)}
           >
-            <Node id={node.id} data={node.data} selected={node.selected} />
-          </div>
-        );
-      })}
-      <svg aria-label="Rendered relationship edges">
-        {edges.map((edge) => (
-          <path
-            key={edge.id}
-            data-testid={`edge-${edge.id}`}
-            data-kind={edge.data.relationship.kind}
-            data-opacity={String(edge.style?.opacity ?? 1)}
-            markerEnd={edge.markerEnd ? "url(#dependency-arrow)" : undefined}
-          />
+            {node.entry.task.key}
+          </button>
         ))}
-      </svg>
-    </div>
-  ),
-}));
+        <svg aria-label="Rendered relationship edges">
+          {data.links.map((link) => (
+            <path
+              key={link.id}
+              data-testid={`edge-${link.id}`}
+              data-kind={link.relationship.kind}
+              data-width={String(props.linkWidth(link))}
+              data-dash={JSON.stringify(props.linkLineDash(link))}
+              data-arrow={String(props.linkDirectionalArrowLength(link))}
+            />
+          ))}
+        </svg>
+      </div>
+    );
+  });
+  return { default: MockForceGraph };
+});
 
 const { RelationshipGraphCanvas, relationshipNodeAriaLabel } = await import(
   "./graph-canvas.js"
@@ -159,22 +152,25 @@ function CanvasHarness({
 afterEach(cleanup);
 
 beforeEach(() => {
-  mocks.fitView.mockClear();
-  mocks.layout.mockReset();
-  mocks.layout.mockResolvedValue({
-    positions: new Map([
-      [root.id, { x: 0, y: 0 }],
-      [child.id, { x: 100, y: 0 }],
-      [sibling.id, { x: 100, y: 100 }],
-      [blocker.id, { x: -100, y: 0 }],
-    ]),
-    group: null,
-    width: 300,
-    height: 200,
+  for (const mock of Object.values(mocks)) mock.mockClear();
+  mocks.d3Force.mockImplementation((name: string) => {
+    if (name === "charge") {
+      return {
+        strength: mocks.chargeStrength,
+        distanceMin: mocks.chargeDistanceMin,
+      };
+    }
+    if (name === "link") {
+      return {
+        distance: mocks.linkDistance,
+        strength: mocks.linkStrength,
+      };
+    }
+    return undefined;
   });
 });
 
-describe("relationship graph canvas behavior", () => {
+describe("relationship force graph behavior", () => {
   it("names hierarchy and resolved dependency relationships to the root", () => {
     expect(relationshipNodeAriaLabel(graph, child.id)).toContain(
       "Subtask of TSK-1",
@@ -185,28 +181,32 @@ describe("relationship graph canvas behavior", () => {
     expect(relationshipNodeAriaLabel(graph, root.id)).toContain("Root task");
   });
 
-  it("renders arrows only for dependencies and keeps containment non-directional", async () => {
+  it("renders arrows only for dependencies and distinguishes relationship lines", async () => {
     render(<CanvasHarness />);
-    await screen.findByRole("button", { name: /TSK-1:/ });
+    await screen.findByTestId("force-graph");
     const dependency = screen.getByTestId("edge-dependency:blocker:root");
     const containment = screen.getByTestId("edge-containment:root:child");
-    expect(dependency.getAttribute("marker-end")).toContain("dependency-arrow");
-    expect(containment.getAttribute("marker-end")).toBeNull();
+    expect(dependency.getAttribute("data-arrow")).toBe("4");
+    expect(dependency.getAttribute("data-dash")).toBe("[7,5]");
+    expect(containment.getAttribute("data-arrow")).toBe("0");
+    expect(containment.getAttribute("data-dash")).toBe("[2,5]");
   });
 
-  it("scopes directional focus to the active canvas", async () => {
+  it("scopes directional keyboard focus to the active graph", async () => {
     render(
       <>
         <CanvasHarness />
         <CanvasHarness />
       </>,
     );
-    const canvases = await screen.findAllByTestId("react-flow");
+    const canvases = await screen.findAllByRole("application", {
+      name: "Interactive task relationship graph",
+    });
     const secondRoot = within(canvases[1]!).getByRole("button", {
       name: /TSK-1:/,
     });
     secondRoot.focus();
-    fireEvent.keyDown(secondRoot, { key: "ArrowRight" });
+    fireEvent.keyDown(secondRoot, { key: "ArrowDown" });
     await waitFor(() =>
       expect(within(canvases[1]!).getByRole("button", { name: /TSK-2:/ })).toBe(
         document.activeElement,
@@ -217,7 +217,7 @@ describe("relationship graph canvas behavior", () => {
     ).not.toBe(document.activeElement);
   });
 
-  it("opens or selects the actually focused node with O and Enter", async () => {
+  it("opens or selects the focused node with O and Enter", async () => {
     const open = vi.fn();
     const view = render(<CanvasHarness onOpenTask={open} />);
     const childNode = await screen.findByRole("button", { name: /TSK-2:/ });
@@ -249,39 +249,51 @@ describe("relationship graph canvas behavior", () => {
     expect(open).toHaveBeenLastCalledWith(child.id);
   });
 
-  it("fits without camera animation and opts node muting out of reduced motion", async () => {
-    render(<CanvasHarness />);
-    const rootNode = await screen.findByRole("button", { name: /TSK-1:/ });
-    await waitFor(() => expect(mocks.fitView).toHaveBeenCalled());
-    mocks.fitView.mockClear();
-    rootNode.focus();
-    fireEvent.keyDown(rootNode, { key: "0" });
-    expect(mocks.fitView).toHaveBeenCalledWith(
-      expect.objectContaining({ duration: 0 }),
+  it("configures force spacing and fits without camera animation", async () => {
+    const view = render(<CanvasHarness />);
+    await waitFor(() => expect(mocks.reheat).toHaveBeenCalled());
+    expect(mocks.chargeStrength).toHaveBeenCalledWith(-420);
+    expect(mocks.linkDistance).toHaveBeenCalledWith(expect.any(Function));
+    expect(mocks.d3Force).toHaveBeenCalledWith(
+      "label-collision",
+      expect.any(Function),
     );
-    expect(rootNode.innerHTML).toContain("motion-reduce:transition-none");
+
+    view.rerender(
+      <RelationshipGraphCanvas
+        graph={graph}
+        compact={false}
+        selectedTaskId={root.id}
+        onSelect={() => {}}
+        onOpenTask={() => {}}
+        fitRequest={1}
+        interactive
+        omittedNodeCount={0}
+        omittedEdgeCount={0}
+      />,
+    );
+    await waitFor(() => expect(mocks.zoomToFit).toHaveBeenCalledWith(0, 48));
   });
 
-  it("mutes nodes and edges unrelated to the focused task", async () => {
+  it("shows the full task card on hover and emphasizes connected links", async () => {
     render(<CanvasHarness />);
-    const childNode = await screen.findByRole("button", { name: /TSK-2:/ });
-    childNode.focus();
-    await waitFor(() => expect(childNode.dataset.selected).toBe("true"));
-    const siblingNode = screen.getByRole("button", { name: /TSK-3:/ });
-    expect(siblingNode.innerHTML).toContain("opacity-35");
+    const canvasNode = await screen.findByTestId("canvas-node-child");
+    fireEvent.mouseEnter(canvasNode);
+    expect((await screen.findByRole("tooltip")).textContent).toContain("Task 2");
+    expect(
+      screen.getByTestId("edge-containment:root:child").getAttribute("data-width"),
+    ).toBe("1.8");
     expect(
       screen
         .getByTestId("edge-containment:root:sibling")
-        .getAttribute("data-opacity"),
-    ).toBe("0.3");
+        .getAttribute("data-width"),
+    ).toBe("0.8");
   });
 
-  it("reports layout failures instead of leaving a focusable broken canvas", async () => {
-    mocks.layout.mockRejectedValueOnce(new Error("layout exploded"));
-    render(<CanvasHarness />);
-    expect((await screen.findByRole("alert")).textContent).toContain(
-      "layout exploded",
-    );
-    expect(screen.queryByTestId("react-flow")).toBeNull();
+  it("opens compact nodes on click and selects expanded nodes", async () => {
+    const open = vi.fn();
+    render(<CanvasHarness compact onOpenTask={open} />);
+    fireEvent.click(await screen.findByTestId("canvas-node-child"));
+    expect(open).toHaveBeenCalledWith(child.id);
   });
 });

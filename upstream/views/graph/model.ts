@@ -1,6 +1,7 @@
 import type { DependencyTask, Project, Task } from "../../shared/contract.js";
 
 export type RelationshipKind = "containment" | "dependency";
+export type RelationshipGraphDepth = 1 | 2 | "all-blockers";
 
 export interface RelationshipGraphNode {
   task: Task;
@@ -61,7 +62,6 @@ export const DEFAULT_GRAPH_FILTERS: RelationshipGraphFilters = {
   resolved: true,
 };
 
-export const LOCAL_GRAPH_NODE_LIMIT = 12;
 export const ATLAS_GRAPH_WARNING_LIMIT = 75;
 export const ATLAS_GRAPH_NODE_LIMIT = 150;
 
