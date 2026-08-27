@@ -12,6 +12,7 @@ import type { Project, Task } from "../../shared/contract.js";
 import { buildRelationshipGraph } from "./model.js";
 
 const mocks = vi.hoisted(() => ({
+  zoom: vi.fn(() => 3),
   zoomToFit: vi.fn(),
   reheat: vi.fn(),
   graph2ScreenCoords: vi.fn((x: number, y: number) => ({ x, y })),
@@ -29,6 +30,7 @@ vi.mock("react-force-graph-2d", async () => {
     ref: React.ForwardedRef<Record<string, any>>,
   ) {
     React.useImperativeHandle(ref, () => ({
+      zoom: mocks.zoom,
       zoomToFit: mocks.zoomToFit,
       d3ReheatSimulation: mocks.reheat,
       graph2ScreenCoords: mocks.graph2ScreenCoords,
@@ -40,6 +42,7 @@ vi.mock("react-force-graph-2d", async () => {
     };
     return (
       <div data-testid="force-graph">
+        <button data-testid="engine-stop" onClick={props.onEngineStop} />
         {data.nodes.map((node) => (
           <button
             key={node.id}
@@ -273,6 +276,11 @@ describe("relationship force graph behavior", () => {
       />,
     );
     await waitFor(() => expect(mocks.zoomToFit).toHaveBeenCalledWith(0, 48));
+
+    mocks.zoomToFit.mockClear();
+    fireEvent.click(screen.getByTestId("engine-stop"));
+    expect(mocks.zoomToFit).toHaveBeenCalledWith(0, 48);
+    expect(mocks.zoom).toHaveBeenCalledWith(1.35, 0);
   });
 
   it("shows the full task card on hover and emphasizes connected links", async () => {

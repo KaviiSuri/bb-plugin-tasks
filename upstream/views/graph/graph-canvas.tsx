@@ -343,6 +343,18 @@ function GraphCanvasInner({
     card.style.top = `${Math.max(8, Math.min(height - 130, point.y + (placeAbove ? -126 : 12)))}px`;
   }, [focusedTaskId, height, hoveredTaskId, nodeById, nodes, width]);
 
+  const fitGraph = useCallback(
+    (capAutomaticZoom = false) => {
+      const instance = graphRef.current;
+      if (!instance) return;
+      instance.zoomToFit(0, compact ? 24 : 48);
+      if (!capAutomaticZoom) return;
+      const maxInitialZoom = compact ? 1.1 : 1.35;
+      if (instance.zoom() > maxInitialZoom) instance.zoom(maxInitialZoom, 0);
+    },
+    [compact],
+  );
+
   useEffect(() => {
     const instance = graphRef.current;
     if (!instance || nodes.length === 0) return;
@@ -378,8 +390,8 @@ function GraphCanvasInner({
 
   useEffect(() => {
     if (fitRequest === 0 || nodes.length === 0) return;
-    graphRef.current?.zoomToFit(0, compact ? 24 : 48);
-  }, [compact, fitRequest, height, nodes.length, width]);
+    fitGraph();
+  }, [fitGraph, fitRequest, height, nodes.length, width]);
 
   useEffect(() => {
     setFocusedTaskId((current) => (graph.nodes.has(current) ? current : ""));
@@ -444,7 +456,7 @@ function GraphCanvasInner({
   const onNodeKeyDown = (event: React.KeyboardEvent, taskId: string) => {
     if (event.key === "0") {
       event.preventDefault();
-      graphRef.current?.zoomToFit(0, compact ? 24 : 48);
+      fitGraph();
       return;
     }
     if (event.key === "o" || event.key === "O") {
@@ -530,7 +542,7 @@ function GraphCanvasInner({
           onNodeDrag={updateOverlayPositions}
           onEngineTick={updateOverlayPositions}
           onEngineStop={() => {
-            graphRef.current?.zoomToFit(0, compact ? 24 : 48);
+            fitGraph(true);
             updateOverlayPositions();
           }}
           onZoom={updateOverlayPositions}
