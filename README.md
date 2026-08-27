@@ -56,15 +56,54 @@ far below the rejected ELK prototype's roughly 571 KB gzip addition.
 
 ## Install
 
-The plugin id `tasks` is reserved for the bundled plugin, so this installs
-alongside it as a separate plugin with **its own data directory**. To take over
-from the builtin you must migrate data and disable it:
+Install the latest compatible tagged release. BB records the immutable tag and
+commit, and `bb plugin update tasks-kv` advances within the selected range:
 
 ```sh
-cp -R ~/.bb/plugins/tasks/ ~/.bb/plugins/tasks-kv/    # verify on a copy first
-bb plugin install .
+bb plugin install git:https://github.com/KaviiSuri/bb-plugin-tasks.git@^0.1.1
+```
+
+Use `@main` only when testing unreleased changes. The plugin id `tasks` is
+reserved for the bundled plugin, so this installs alongside it as `tasks-kv`
+with its own data directory. To take over from the builtin, migrate a verified
+copy of its data and disable it:
+
+```sh
+cp -R ~/.bb/plugins/tasks/ ~/.bb/plugins/tasks-kv/
 bb plugin disable tasks
 ```
+
+## Releasing
+
+Releases are immutable annotated `vX.Y.Z` tags. The release commit contains the
+matching `package.json`, lockfile, generated SDK declarations, and BB build
+metadata in `dist/`. CI runs the
+graph tests, builds with the exact pinned `bb-app`, verifies artifact identity
+and version, and audits production dependencies.
+
+Run a local dry release without pushing:
+
+```sh
+npm run release -- patch
+npm run release -- 1.2.0
+```
+
+Add `--push` to atomically push the release commit and tag:
+
+```sh
+npm run release -- minor --push
+```
+
+The preferred remote flow is the on-demand **Release** GitHub workflow. Choose
+`patch`, `minor`, `major`, or an exact custom version. It validates the plugin,
+builds versioned artifacts, atomically publishes `main` and the tag, then creates
+a GitHub release with generated notes:
+
+```sh
+gh workflow run release.yml -f bump=patch
+```
+
+Never move or recreate a published tag. Cut a new patch release instead.
 
 ## Sync with upstream
 

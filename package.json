@@ -64,6 +64,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.2.4",
+    "bb-app": "0.38.0",
     "better-sqlite3": "^12.0.0",
     "hono": "^4.11.9",
     "jsdom": "^29.0.1",
@@ -76,7 +77,11 @@
   "scripts": {
     "gen:shim": "node scripts/gen-shared-ui-shim.mjs",
     "build": "npm run gen:shim && bb plugin build .",
+    "test:graph": "vitest run --config upstream/vitest.config.ts views/graph shell/route-model.test.ts",
     "test:blocking": "vitest run --config upstream/vitest.config.ts blocking.test.ts dependencies.test.ts views/blocking views/list/list-preference.test.ts",
+    "verify:release": "node scripts/verify-release.mjs",
+    "check": "npm run test:graph && npm run build && npm run verify:release",
+    "release": "bash scripts/release.sh",
     "sync:upstream": "bash scripts/sync-upstream.sh"
   }
 }
